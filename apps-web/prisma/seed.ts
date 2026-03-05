@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
-import { Role } from "../src/generated/prisma/enums";
+import { Role, TaxonomyNodeType } from "../src/generated/prisma/enums";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -46,7 +46,35 @@ async function main() {
     });
   }
 
-  console.log("Seeded: 1 admin user, 1 adviser, 5 clients");
+  // ── Default Taxonomy ──
+  const existingTaxonomy = await prisma.taxonomy.findFirst({
+    where: { name: "Default SAA Taxonomy" },
+  });
+  if (!existingTaxonomy) {
+    await prisma.taxonomy.create({
+      data: {
+        name: "Default SAA Taxonomy",
+        description: "Standard risk-bucket classification",
+        createdByUserId: user.id,
+        nodes: {
+          create: [
+            { name: "Growth", nodeType: TaxonomyNodeType.RISK, sortOrder: 0 },
+            { name: "Defensive", nodeType: TaxonomyNodeType.RISK, sortOrder: 1 },
+          ],
+        },
+      },
+    });
+  }
+
+  // ── Cleanup: remove any leftover LIQUIDITY nodes ──
+  const deleted = await prisma.taxonomyNode.deleteMany({
+    where: { nodeType: TaxonomyNodeType.LIQUIDITY },
+  });
+  if (deleted.count > 0) {
+    console.log(`Cleaned up ${deleted.count} LIQUIDITY node(s)`);
+  }
+
+  console.log("Seeded: 1 admin user, 1 adviser, 5 clients, 1 taxonomy");
 }
 
 main()

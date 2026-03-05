@@ -19,7 +19,8 @@ model User {
   role      Role
   createdAt DateTime @default(now())
 
-  adviser Adviser?
+  adviser    Adviser?
+  taxonomies Taxonomy[]
 }
 
 model Adviser {
@@ -39,4 +40,37 @@ model Client {
   createdAt DateTime @default(now())
 
   adviser Adviser @relation(fields: [adviserId], references: [id])
+}
+
+// ── Taxonomy ────────────────────────────────────────────
+
+enum TaxonomyNodeType {
+  RISK
+  LIQUIDITY
+  ASSET_CLASS
+  SUB_ASSET
+}
+
+model Taxonomy {
+  id              String         @id @default(cuid())
+  name            String
+  description     String?
+  createdAt       DateTime       @default(now())
+  createdByUserId String
+
+  createdBy User           @relation(fields: [createdByUserId], references: [id])
+  nodes     TaxonomyNode[]
+}
+
+model TaxonomyNode {
+  id         String           @id @default(cuid())
+  taxonomyId String
+  parentId   String?
+  name       String
+  nodeType   TaxonomyNodeType
+  sortOrder  Int              @default(0)
+
+  taxonomy Taxonomy       @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
+  parent   TaxonomyNode?  @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children TaxonomyNode[] @relation("NodeTree")
 }
