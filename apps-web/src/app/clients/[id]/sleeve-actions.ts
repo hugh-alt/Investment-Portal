@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { validateTransition, type ApprovalAction, type ActorRole } from "@/lib/approval";
 
 // ── Create Sleeve ───────────────────────────────────────
 
@@ -246,6 +247,76 @@ export async function addLiquidPositionAction(
       marketValue,
     },
   });
+
+  revalidatePath(`/clients/${parsed.data.clientId}`);
+  return { success: true };
+}
+
+// ── Approve / Reject Recommendation ────────────────────
+
+const approvalSchema = z.object({
+  clientId: z.string().min(1),
+  recommendationId: z.string().min(1),
+  action: z.enum(["APPROVE", "REJECT"]),
+  note: z.string().optional(),
+});
+
+export async function approveRecommendationAction(
+  _prev: SleeveFormState,
+  formData: FormData,
+): Promise<SleeveFormState> {
+  const user = await requireUser();
+
+  const parsed = approvalSchema.safeParse({
+    clientId: formData.get("clientId"),
+    recommendationId: formData.get("recommendationId"),
+    action: formData.get("action"),
+    note: formData.get("note"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const rec = await prisma.sleeveRecommendation.findUnique({
+    where: { id: parsed.data.recommendationId },
+  });
+  if (!rec) return { error: "Recommendation not found" };
+
+  const actorRole = user.role as ActorRole;
+  const approvalAction = parsed.data.action as ApprovalAction;
+
+  const result = validateTransition(
+    rec.status as "DRAFT" | "ADVISER_APPROVED" | "CLIENT_APPROVED" | "REJECTED",
+    approvalAction,
+    actorRole,
+  );
+  if (!result.ok) return { error: result.error };
+
+  const now = new Date();
+  const updateData: Record<string, unknown> = { status: result.newStatus };
+
+  if (result.newStatus === "ADVISER_APPROVED") {
+    updateData.adviserApprovedAt = now;
+  } else if (result.newStatus === "CLIENT_APPROVED") {
+    updateData.clientApprovedAt = now;
+  } else if (result.newStatus === "REJECTED") {
+    updateData.rejectedAt = now;
+    updateData.rejectionReason = parsed.data.note || null;
+  }
+
+  await prisma.$transaction([
+    prisma.sleeveRecommendation.update({
+      where: { id: rec.id },
+      data: updateData,
+    }),
+    prisma.approvalEvent.create({
+      data: {
+        recommendationId: rec.id,
+        action: approvalAction,
+        actorUserId: user.id,
+        actorRole: user.role,
+        note: parsed.data.note || null,
+      },
+    }),
+  ]);
 
   revalidatePath(`/clients/${parsed.data.clientId}`);
   return { success: true };

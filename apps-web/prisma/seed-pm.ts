@@ -1,5 +1,5 @@
 import { PrismaClient } from "../src/generated/prisma/client";
-import { PMFundStatus, LifecycleStage, BufferMethod } from "../src/generated/prisma/enums";
+import { PMFundStatus, LifecycleStage, BufferMethod, ApprovalStatus, RecommendationKind, RecommendationAction } from "../src/generated/prisma/enums";
 
 const PM_FUNDS = [
   { id: "pmf-infra", name: "Macquarie Infrastructure Fund V", vintageYear: 2023, strategy: "Infrastructure", currency: "AUD", status: PMFundStatus.OPEN, lifecycleStage: LifecycleStage.INVESTING, firstCloseDate: new Date("2023-03-15"), investmentPeriodMonths: 48, fundTermMonths: 120 },
@@ -71,6 +71,7 @@ function distCurve(stage: LifecycleStage): { month: string; cumPct: number }[] {
 
 export async function seedPM(prisma: PrismaClient, clientIds: string[]) {
   // Clean existing PM data for idempotency
+  await prisma.approvalEvent.deleteMany({});
   await prisma.sleeveRecommendationLeg.deleteMany({});
   await prisma.sleeveRecommendation.deleteMany({});
   await prisma.sleeveAlert.deleteMany({});
@@ -264,5 +265,22 @@ export async function seedPM(prisma: PrismaClient, clientIds: string[]) {
     data: { clientSleeveId: sleeve2.id, productId: "prod-wbc", marketValue: 5000 },
   });
 
-  console.log("Created 8 PM funds with lifecycle stages + % curves, 2 client sleeves with waterfall configs");
+  // ── Seed a DRAFT sell recommendation for Bob (shortfall scenario) ──
+  await prisma.sleeveRecommendation.create({
+    data: {
+      clientSleeveId: sleeve2.id,
+      kind: RecommendationKind.RAISE_LIQUIDITY,
+      summary: "Raise $15,500 to cover liquidity shortfall",
+      status: ApprovalStatus.DRAFT,
+      legs: {
+        create: [
+          { action: RecommendationAction.SELL, productId: "prod-vas", amount: 8000, reason: "Waterfall #1, up to 100% of ETF" },
+          { action: RecommendationAction.SELL, productId: "prod-f1", amount: 5000, reason: "Waterfall #2, up to 100% of FUND" },
+          { action: RecommendationAction.SELL, productId: "prod-cba", amount: 2000, reason: "Waterfall #3, max 50% of DIRECT" },
+        ],
+      },
+    },
+  });
+
+  console.log("Created 8 PM funds with lifecycle stages + % curves, 2 client sleeves with waterfall configs, 1 DRAFT recommendation");
 }

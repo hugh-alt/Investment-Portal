@@ -326,15 +326,45 @@ enum RecommendationAction {
   BUY
 }
 
+enum ApprovalStatus {
+  DRAFT
+  ADVISER_APPROVED
+  CLIENT_APPROVED
+  REJECTED
+}
+
+enum ApprovalAction {
+  APPROVE
+  REJECT
+}
+
 model SleeveRecommendation {
-  id             String             @id @default(cuid())
-  clientSleeveId String
-  kind           RecommendationKind
-  summary        String
-  createdAt      DateTime           @default(now())
+  id               String             @id @default(cuid())
+  clientSleeveId   String
+  kind             RecommendationKind
+  summary          String
+  status           ApprovalStatus     @default(DRAFT)
+  adviserApprovedAt DateTime?
+  clientApprovedAt  DateTime?
+  rejectedAt        DateTime?
+  rejectionReason   String?
+  createdAt        DateTime           @default(now())
 
   sleeve ClientSleeve              @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
   legs   SleeveRecommendationLeg[]
+  events ApprovalEvent[]
+}
+
+model ApprovalEvent {
+  id               String           @id @default(cuid())
+  recommendationId String
+  action           ApprovalAction
+  actorUserId      String
+  actorRole        String
+  note             String?
+  createdAt        DateTime         @default(now())
+
+  recommendation SleeveRecommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
 }
 
 model SleeveRecommendationLeg {

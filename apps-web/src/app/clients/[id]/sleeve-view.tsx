@@ -10,8 +10,10 @@ import {
   addLiquidPositionAction,
   updateBufferConfigAction,
   updateWaterfallConfigAction,
+  approveRecommendationAction,
   type SleeveFormState,
 } from "./sleeve-actions";
+import { statusLabel, nextStepLabel } from "@/lib/approval";
 
 const fmt = (v: number) =>
   "$" + v.toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -98,6 +100,38 @@ type AlertInfo = {
   createdAt: string;
 };
 
+type RecommendationEvent = {
+  id: string;
+  action: string;
+  actorUserId: string;
+  actorRole: string;
+  note: string | null;
+  createdAt: string;
+};
+
+type RecommendationLeg = {
+  id: string;
+  action: string;
+  productId: string;
+  productName: string;
+  amount: number;
+  reason: string;
+};
+
+type PersistedRecommendation = {
+  id: string;
+  kind: string;
+  summary: string;
+  status: string;
+  createdAt: string;
+  adviserApprovedAt: string | null;
+  clientApprovedAt: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+  legs: RecommendationLeg[];
+  events: RecommendationEvent[];
+};
+
 export function SleeveSummary({
   sleeveName,
   targetPct,
@@ -117,6 +151,7 @@ export function SleeveSummary({
   sellWaterfall,
   buyWaterfall,
   minTradeAmount,
+  recommendations,
 }: {
   sleeveName: string;
   targetPct: number | null;
@@ -136,6 +171,7 @@ export function SleeveSummary({
   sellWaterfall: SellWaterfallEntry[];
   buyWaterfall: BuyWaterfallEntry[];
   minTradeAmount: number;
+  recommendations: PersistedRecommendation[];
 }) {
   const [expandedFund, setExpandedFund] = useState<string | null>(null);
 
@@ -233,11 +269,11 @@ export function SleeveSummary({
         sleeveId={sleeveId}
       />
 
-      {/* Recommended Actions */}
-      {(sellRecommendation || buyRecommendation) && (
+      {/* Recommended Actions with Approval Workflow */}
+      {recommendations.length > 0 && (
         <RecommendedActionsPanel
-          sellRecommendation={sellRecommendation}
-          buyRecommendation={buyRecommendation}
+          recommendations={recommendations}
+          clientId={clientId}
         />
       )}
 
@@ -587,84 +623,177 @@ function BufferConfigForm({
 
 // ── Recommended Actions Panel ────────────────────────────
 
+const STATUS_COLORS: Record<string, string> = {
+  DRAFT: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300",
+  ADVISER_APPROVED: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
+  CLIENT_APPROVED: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
+  REJECTED: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300",
+};
+
 function RecommendedActionsPanel({
-  sellRecommendation,
-  buyRecommendation,
+  recommendations,
+  clientId,
 }: {
-  sellRecommendation: SellRecommendation | null;
-  buyRecommendation: BuyRecommendation | null;
+  recommendations: PersistedRecommendation[];
+  clientId: string;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Recommended Actions</h4>
+    <div className="space-y-3">
+      <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Recommendations</h4>
+      {recommendations.map((rec) => (
+        <RecommendationCard key={rec.id} rec={rec} clientId={clientId} />
+      ))}
+    </div>
+  );
+}
 
-      {sellRecommendation && (
-        <div className="mt-3">
-          <div className="flex items-center gap-2">
-            <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-300">
-              RAISE LIQUIDITY
-            </span>
-            <span className="text-sm text-zinc-600 dark:text-zinc-400">{sellRecommendation.summary}</span>
-          </div>
-          <div className="mt-2 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
-                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Action</th>
-                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Product</th>
-                  <th className="px-3 py-1.5 text-right text-xs font-medium text-zinc-500">Amount</th>
-                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Reason</th>
+function RecommendationCard({
+  rec,
+  clientId,
+}: {
+  rec: PersistedRecommendation;
+  clientId: string;
+}) {
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [approveState, approveAction, approvePending] = useActionState<SleeveFormState, FormData>(
+    approveRecommendationAction,
+    {},
+  );
+
+  const kindBadge = rec.kind === "RAISE_LIQUIDITY"
+    ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
+    : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300";
+
+  const statusColor = STATUS_COLORS[rec.status] ?? "bg-zinc-100 text-zinc-600";
+  const step = nextStepLabel(rec.status as "DRAFT" | "ADVISER_APPROVED" | "CLIENT_APPROVED" | "REJECTED");
+
+  return (
+    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      {/* Header: kind + status + date */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${kindBadge}`}>
+          {rec.kind === "RAISE_LIQUIDITY" ? "RAISE LIQUIDITY" : "INVEST EXCESS"}
+        </span>
+        <span className={`rounded px-2 py-0.5 text-xs font-semibold ${statusColor}`}>
+          {statusLabel(rec.status as "DRAFT" | "ADVISER_APPROVED" | "CLIENT_APPROVED" | "REJECTED")}
+        </span>
+        <span className="text-xs text-zinc-400">{new Date(rec.createdAt).toLocaleDateString()}</span>
+        {step && <span className="text-xs text-zinc-500 italic">{step}</span>}
+      </div>
+
+      {/* Summary */}
+      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{rec.summary}</p>
+
+      {/* Rejection reason */}
+      {rec.status === "REJECTED" && rec.rejectionReason && (
+        <p className="mt-1 text-xs text-red-600 dark:text-red-400">Reason: {rec.rejectionReason}</p>
+      )}
+
+      {/* Legs table */}
+      {rec.legs.length > 0 && (
+        <div className="mt-2 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+                <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Action</th>
+                <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Product</th>
+                <th className="px-3 py-1.5 text-right text-xs font-medium text-zinc-500">Amount</th>
+                <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rec.legs.map((leg) => (
+                <tr key={leg.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
+                  <td className="px-3 py-1.5">
+                    <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${leg.action === "SELL" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
+                      {leg.action}
+                    </span>
+                  </td>
+                  <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-100">{leg.productName}</td>
+                  <td className="px-3 py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmt(leg.amount)}</td>
+                  <td className="px-3 py-1.5 text-xs text-zinc-500">{leg.reason}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {sellRecommendation.legs.map((leg, i) => (
-                  <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
-                    <td className="px-3 py-1.5">
-                      <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">SELL</span>
-                    </td>
-                    <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-100">{leg.productName}</td>
-                    <td className="px-3 py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmt(leg.amount)}</td>
-                    <td className="px-3 py-1.5 text-xs text-zinc-500">{leg.reason}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {buyRecommendation && (
-        <div className="mt-3">
-          <div className="flex items-center gap-2">
-            <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-300">
-              INVEST EXCESS
-            </span>
-            <span className="text-sm text-zinc-600 dark:text-zinc-400">{buyRecommendation.summary}</span>
-          </div>
-          <div className="mt-2 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
-                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Action</th>
-                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Product</th>
-                  <th className="px-3 py-1.5 text-right text-xs font-medium text-zinc-500">Amount</th>
-                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {buyRecommendation.legs.map((leg, i) => (
-                  <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
-                    <td className="px-3 py-1.5">
-                      <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-300">BUY</span>
-                    </td>
-                    <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-100">{leg.productName}</td>
-                    <td className="px-3 py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmt(leg.amount)}</td>
-                    <td className="px-3 py-1.5 text-xs text-zinc-500">{leg.reason}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      {/* Action buttons */}
+      {(rec.status === "DRAFT" || rec.status === "ADVISER_APPROVED") && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <form action={approveAction}>
+            <input type="hidden" name="clientId" value={clientId} />
+            <input type="hidden" name="recommendationId" value={rec.id} />
+            <input type="hidden" name="action" value="APPROVE" />
+            <button
+              type="submit"
+              disabled={approvePending}
+              className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 disabled:opacity-50"
+            >
+              {approvePending ? "..." : rec.status === "DRAFT" ? "Adviser Approve" : "Client Approve"}
+            </button>
+          </form>
+
+          {!showRejectForm ? (
+            <button
+              type="button"
+              onClick={() => setShowRejectForm(true)}
+              className="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+            >
+              Reject
+            </button>
+          ) : (
+            <form action={approveAction} className="flex items-center gap-1.5">
+              <input type="hidden" name="clientId" value={clientId} />
+              <input type="hidden" name="recommendationId" value={rec.id} />
+              <input type="hidden" name="action" value="REJECT" />
+              <input
+                name="note"
+                type="text"
+                placeholder="Reason (optional)"
+                className="w-40 rounded border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              />
+              <button
+                type="submit"
+                disabled={approvePending}
+                className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50"
+              >
+                Confirm Reject
+              </button>
+              <button type="button" onClick={() => setShowRejectForm(false)} className="text-xs text-zinc-400">Cancel</button>
+            </form>
+          )}
+
+          {approveState.error && <span className="text-xs text-red-600">{approveState.error}</span>}
+        </div>
+      )}
+
+      {/* Timeline toggle */}
+      {rec.events.length > 0 && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowTimeline(!showTimeline)}
+            className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+          >
+            {showTimeline ? "Hide" : "Show"} history ({rec.events.length})
+          </button>
+          {showTimeline && (
+            <div className="mt-1 space-y-1">
+              {rec.events.map((e) => (
+                <div key={e.id} className="flex items-center gap-2 text-xs text-zinc-500">
+                  <span className={`rounded px-1.5 py-0.5 font-medium ${e.action === "APPROVE" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"}`}>
+                    {e.action}
+                  </span>
+                  <span>{e.actorRole}</span>
+                  <span className="text-zinc-400">{new Date(e.createdAt).toLocaleString()}</span>
+                  {e.note && <span className="italic text-zinc-400">— {e.note}</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

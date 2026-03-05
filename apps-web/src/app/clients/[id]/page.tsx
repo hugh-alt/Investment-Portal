@@ -577,6 +577,76 @@ async function SleeveSection({ clientId }: { clientId: string }) {
     }
   }
 
+  // Persist new recommendation as DRAFT if computed and no active (non-rejected) recommendation exists
+  const existingActive = await prisma.sleeveRecommendation.findFirst({
+    where: {
+      clientSleeveId: sleeve.id,
+      status: { not: "REJECTED" },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const recommendation = sellRecommendation || buyRecommendation;
+  if (recommendation && !existingActive) {
+    const kind = sellRecommendation ? "RAISE_LIQUIDITY" as const : "INVEST_EXCESS" as const;
+    const legs = sellRecommendation?.legs ?? buyRecommendation?.legs ?? [];
+    await prisma.sleeveRecommendation.create({
+      data: {
+        clientSleeveId: sleeve.id,
+        kind,
+        summary: recommendation.summary,
+        status: "DRAFT",
+        legs: {
+          create: legs.map((leg) => ({
+            action: sellRecommendation ? "SELL" : "BUY",
+            productId: leg.productId,
+            amount: leg.amount,
+            reason: leg.reason,
+          })),
+        },
+      },
+    });
+  }
+
+  // Fetch persisted recommendations with events
+  const persistedRecommendations = await prisma.sleeveRecommendation.findMany({
+    where: { clientSleeveId: sleeve.id },
+    include: {
+      legs: { include: { product: { select: { name: true, type: true } } } },
+      events: { orderBy: { createdAt: "asc" } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+  });
+
+  const recommendationsForUI = persistedRecommendations.map((r) => ({
+    id: r.id,
+    kind: r.kind as string,
+    summary: r.summary,
+    status: r.status as string,
+    createdAt: r.createdAt.toISOString(),
+    adviserApprovedAt: r.adviserApprovedAt?.toISOString() ?? null,
+    clientApprovedAt: r.clientApprovedAt?.toISOString() ?? null,
+    rejectedAt: r.rejectedAt?.toISOString() ?? null,
+    rejectionReason: r.rejectionReason,
+    legs: r.legs.map((l) => ({
+      id: l.id,
+      action: l.action as string,
+      productId: l.productId,
+      productName: l.product.name,
+      amount: l.amount,
+      reason: l.reason,
+    })),
+    events: r.events.map((e) => ({
+      id: e.id,
+      action: e.action as string,
+      actorUserId: e.actorUserId,
+      actorRole: e.actorRole,
+      note: e.note,
+      createdAt: e.createdAt.toISOString(),
+    })),
+  }));
+
   // Approved funds for the commitment form
   const approvedFunds = await prisma.pMFund.findMany({
     where: { approval: { isApproved: true } },
@@ -619,6 +689,7 @@ async function SleeveSection({ clientId }: { clientId: string }) {
         sellWaterfall={sellWaterfall}
         buyWaterfall={buyWaterfall}
         minTradeAmount={sleeve.minTradeAmount}
+        recommendations={recommendationsForUI}
       />
     </div>
   );
