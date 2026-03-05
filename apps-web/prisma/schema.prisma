@@ -77,6 +77,7 @@ model Product {
 
   holdings              Holding[]
   lookthroughUnderlying LookthroughHolding[] @relation("UnderlyingProduct")
+  taxonomyMaps          ProductTaxonomyMap[]
 }
 
 model Holding {
@@ -104,6 +105,31 @@ model LookthroughHolding {
   underlyingProduct  Product @relation("UnderlyingProduct", fields: [underlyingProductId], references: [id])
 }
 
+// ── Taxonomy Mapping ─────────────────────────────────────
+
+enum MappingScope {
+  FIRM_DEFAULT
+  ADVISER_OVERRIDE
+  CLIENT_OVERRIDE
+}
+
+model ProductTaxonomyMap {
+  id         String       @id @default(cuid())
+  taxonomyId String
+  productId  String
+  nodeId     String
+  scope      MappingScope @default(FIRM_DEFAULT)
+  adviserId  String?
+  clientId   String?
+  createdAt  DateTime     @default(now())
+
+  taxonomy Taxonomy     @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
+  product  Product      @relation(fields: [productId], references: [id])
+  node     TaxonomyNode @relation(fields: [nodeId], references: [id])
+
+  @@unique([taxonomyId, productId, scope, adviserId, clientId])
+}
+
 // ── Taxonomy ────────────────────────────────────────────
 
 enum TaxonomyNodeType {
@@ -120,8 +146,9 @@ model Taxonomy {
   createdAt       DateTime       @default(now())
   createdByUserId String
 
-  createdBy User           @relation(fields: [createdByUserId], references: [id])
-  nodes     TaxonomyNode[]
+  createdBy    User                 @relation(fields: [createdByUserId], references: [id])
+  nodes        TaxonomyNode[]
+  productMaps  ProductTaxonomyMap[]
 }
 
 model TaxonomyNode {
@@ -132,7 +159,8 @@ model TaxonomyNode {
   nodeType   TaxonomyNodeType
   sortOrder  Int              @default(0)
 
-  taxonomy Taxonomy       @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
-  parent   TaxonomyNode?  @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children TaxonomyNode[] @relation("NodeTree")
+  taxonomy    Taxonomy             @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
+  parent      TaxonomyNode?        @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children    TaxonomyNode[]       @relation("NodeTree")
+  productMaps ProductTaxonomyMap[]
 }
