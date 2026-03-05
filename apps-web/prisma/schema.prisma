@@ -39,7 +39,69 @@ model Client {
   name      String
   createdAt DateTime @default(now())
 
-  adviser Adviser @relation(fields: [adviserId], references: [id])
+  adviser  Adviser   @relation(fields: [adviserId], references: [id])
+  accounts Account[]
+}
+
+// ── Platform / Holdings ─────────────────────────────────
+
+enum Platform {
+  HUB24
+  NETWEALTH
+  CFS
+}
+
+enum ProductType {
+  DIRECT
+  MANAGED_PORTFOLIO
+  FUND
+  ETF
+}
+
+model Account {
+  id          String   @id @default(cuid())
+  clientId    String
+  platform    Platform
+  accountName String
+  createdAt   DateTime @default(now())
+
+  client   Client    @relation(fields: [clientId], references: [id])
+  holdings Holding[]
+}
+
+model Product {
+  id        String      @id @default(cuid())
+  name      String
+  type      ProductType
+  createdAt DateTime    @default(now())
+
+  holdings              Holding[]
+  lookthroughUnderlying LookthroughHolding[] @relation("UnderlyingProduct")
+}
+
+model Holding {
+  id         String   @id @default(cuid())
+  accountId  String
+  productId  String
+  marketValue Float
+  units      Float?
+  price      Float?
+  asAtDate   DateTime @default(now())
+
+  account              Account              @relation(fields: [accountId], references: [id])
+  product              Product              @relation(fields: [productId], references: [id])
+  lookthroughHoldings  LookthroughHolding[]
+}
+
+model LookthroughHolding {
+  id                    String @id @default(cuid())
+  holdingId             String
+  underlyingProductId   String
+  underlyingMarketValue Float
+  weight                Float
+
+  holding            Holding @relation(fields: [holdingId], references: [id], onDelete: Cascade)
+  underlyingProduct  Product @relation("UnderlyingProduct", fields: [underlyingProductId], references: [id])
 }
 
 // ── Taxonomy ────────────────────────────────────────────

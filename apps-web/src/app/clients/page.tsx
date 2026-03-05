@@ -47,8 +47,13 @@ export default async function ClientsPage() {
                   key={client.id}
                   className="border-b border-zinc-100 dark:border-zinc-800"
                 >
-                  <td className="py-3 text-zinc-900 dark:text-zinc-100">
-                    {client.name}
+                  <td className="py-3">
+                    <Link
+                      href={`/clients/${client.id}`}
+                      className="font-medium text-zinc-900 hover:underline dark:text-zinc-100"
+                    >
+                      {client.name}
+                    </Link>
                   </td>
                   <td className="py-3 text-zinc-500">
                     {client.createdAt.toLocaleDateString()}

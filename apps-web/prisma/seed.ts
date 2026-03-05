@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { Role, TaxonomyNodeType } from "../src/generated/prisma/enums";
+import { seedHoldings } from "./seed-holdings";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -74,7 +75,13 @@ async function main() {
     console.log(`Cleaned up ${deleted.count} LIQUIDITY node(s)`);
   }
 
-  console.log("Seeded: 1 admin user, 1 adviser, 5 clients, 1 taxonomy");
+  // ── Platform holdings ──
+  const clientIds = CLIENT_NAMES.map(
+    (name) => `seed-${name.toLowerCase().replace(/\s/g, "-")}`,
+  );
+  await seedHoldings(prisma, clientIds);
+
+  console.log("Seeded: 1 admin user, 1 adviser, 5 clients, 1 taxonomy, holdings + look-through");
 }
 
 main()
