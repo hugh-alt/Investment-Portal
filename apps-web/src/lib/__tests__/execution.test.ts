@@ -88,9 +88,26 @@ describe("canCreateOrders", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects when ADVISER_APPROVED (not fully approved)", () => {
+    const result = canCreateOrders("ADVISER_APPROVED", 0);
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects when REJECTED", () => {
+    const result = canCreateOrders("REJECTED", 0);
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects when orders already exist", () => {
     const result = canCreateOrders("CLIENT_APPROVED", 3);
     expect(result.ok).toBe(false);
+  });
+
+  it("works for both SLEEVE_RECOMMENDATION and REBALANCE_PLAN sources (source-agnostic)", () => {
+    // canCreateOrders is source-agnostic — it only checks status + existing order count
+    // This validates that the same function works for both order sources
+    expect(canCreateOrders("CLIENT_APPROVED", 0)).toEqual({ ok: true });
+    expect(canCreateOrders("DRAFT", 0).ok).toBe(false);
   });
 });
 

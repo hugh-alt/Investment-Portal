@@ -8,6 +8,7 @@ import { MappingScope, TaxonomyNodeType } from "@/generated/prisma/enums";
 import { computeAllocation, type HoldingInput, type MappingInput } from "@/lib/allocation";
 import { generateRebalanceTrades, type RebalanceHolding, type RebalanceTarget } from "@/lib/rebalance";
 import { validateTransition, type ApprovalAction, type ActorRole } from "@/lib/approval";
+import { canCreateOrders, canSubmitOrders, canFillOrders, type ExecutionStatus } from "@/lib/execution";
 
 export type RebalanceFormState = { error?: string; success?: boolean } | null;
 
@@ -279,6 +280,148 @@ export async function rejectRebalancePlanAction(
       },
     },
   });
+
+  revalidatePath(`/clients/${plan.clientId}`);
+  return {};
+}
+
+// ── Execution actions ─────────────────────────────────
+
+export async function createRebalanceOrdersAction(
+  planId: string,
+): Promise<{ error?: string }> {
+  await requireUser();
+
+  const plan = await prisma.rebalancePlan.findUnique({
+    where: { id: planId },
+    include: { trades: true },
+  });
+  if (!plan) return { error: "Plan not found" };
+
+  const existingOrders = await prisma.order.count({
+    where: { sourceId: planId },
+  });
+
+  const check = canCreateOrders(plan.status, existingOrders);
+  if (!check.ok) return { error: check.error };
+
+  await prisma.order.createMany({
+    data: plan.trades.map((t) => ({
+      clientId: plan.clientId,
+      source: "REBALANCE_PLAN" as const,
+      sourceId: planId,
+      productId: t.productId,
+      side: t.side as "BUY" | "SELL",
+      amount: t.amount,
+      status: "CREATED" as const,
+    })),
+  });
+
+  const orders = await prisma.order.findMany({
+    where: { sourceId: planId },
+    select: { id: true },
+  });
+  await prisma.orderEvent.createMany({
+    data: orders.map((o) => ({
+      orderId: o.id,
+      status: "CREATED" as const,
+      note: "Order created from rebalance plan",
+    })),
+  });
+
+  revalidatePath(`/clients/${plan.clientId}`);
+  return {};
+}
+
+export async function submitRebalanceOrdersAction(
+  planId: string,
+): Promise<{ error?: string }> {
+  await requireUser();
+
+  const plan = await prisma.rebalancePlan.findUnique({ where: { id: planId } });
+  if (!plan) return { error: "Plan not found" };
+
+  const orders = await prisma.order.findMany({
+    where: { sourceId: planId },
+  });
+
+  const statuses = orders.map((o) => o.status as ExecutionStatus);
+  const check = canSubmitOrders(statuses);
+  if (!check.ok) return { error: check.error };
+
+  const createdOrders = orders.filter((o) => o.status === "CREATED");
+
+  await prisma.$transaction(
+    createdOrders.flatMap((o) => [
+      prisma.order.update({
+        where: { id: o.id },
+        data: { status: "SUBMITTED" },
+      }),
+      prisma.orderEvent.create({
+        data: {
+          orderId: o.id,
+          status: "SUBMITTED",
+          note: "Simulated submission to platform",
+        },
+      }),
+    ]),
+  );
+
+  revalidatePath(`/clients/${plan.clientId}`);
+  return {};
+}
+
+export async function fillRebalanceOrdersAction(
+  planId: string,
+): Promise<{ error?: string }> {
+  await requireUser();
+
+  const plan = await prisma.rebalancePlan.findUnique({ where: { id: planId } });
+  if (!plan) return { error: "Plan not found" };
+
+  const orders = await prisma.order.findMany({
+    where: { sourceId: planId },
+  });
+
+  const statuses = orders.map((o) => o.status as ExecutionStatus);
+  const check = canFillOrders(statuses);
+  if (!check.ok) return { error: check.error };
+
+  const fillable = orders.filter(
+    (o) => o.status === "SUBMITTED" || o.status === "PARTIALLY_FILLED",
+  );
+
+  const partialIdx = fillable.length > 1 ? Math.floor(Math.random() * fillable.length) : -1;
+
+  type ExecStatus = "FILLED" | "PARTIALLY_FILLED";
+  const ops = fillable.flatMap((o, i) => {
+    let newStatus: ExecStatus;
+    let note: string;
+
+    if (i === partialIdx && o.status === "SUBMITTED") {
+      newStatus = "PARTIALLY_FILLED";
+      note = `Simulated partial fill: ${Math.floor(50 + Math.random() * 40)}% filled`;
+    } else {
+      newStatus = "FILLED";
+      note = "Simulated full fill";
+    }
+
+    return [
+      prisma.order.update({
+        where: { id: o.id },
+        data: { status: newStatus },
+      }),
+      prisma.orderEvent.create({
+        data: {
+          orderId: o.id,
+          status: newStatus,
+          note,
+        },
+      }),
+    ];
+  });
+
+  await prisma.$transaction(ops);
 
   revalidatePath(`/clients/${plan.clientId}`);
   return {};

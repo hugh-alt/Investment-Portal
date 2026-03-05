@@ -694,11 +694,32 @@ async function RebalanceSection({ clientId }: { clientId: string }) {
     take: 5,
   });
 
+  // Fetch orders for each plan
+  const planIds = plans.map((p) => p.id);
+  const allOrders = planIds.length > 0
+    ? await prisma.order.findMany({
+        where: { sourceId: { in: planIds } },
+        include: {
+          product: { select: { name: true } },
+          events: { orderBy: { createdAt: "desc" }, take: 1 },
+        },
+        orderBy: { createdAt: "asc" },
+      })
+    : [];
+
+  const ordersByPlanId = new Map<string, typeof allOrders>();
+  for (const o of allOrders) {
+    const list = ordersByPlanId.get(o.sourceId) ?? [];
+    list.push(o);
+    ordersByPlanId.set(o.sourceId, list);
+  }
+
   const plansForUI = plans.map((p) => {
     let summary;
     try { summary = JSON.parse(p.summaryJson); } catch { summary = { totalPortfolioValue: 0, breachesBefore: 0, breachesAfter: 0, beforeDrift: [], afterDrift: [] }; }
     return {
       id: p.id,
+      clientId,
       status: p.status as string,
       summary,
       createdAt: p.createdAt.toISOString(),
@@ -716,6 +737,14 @@ async function RebalanceSection({ clientId }: { clientId: string }) {
         actorRole: e.actorRole,
         note: e.note,
         createdAt: e.createdAt.toISOString(),
+      })),
+      orders: (ordersByPlanId.get(p.id) ?? []).map((o) => ({
+        id: o.id,
+        productName: o.product.name,
+        side: o.side as string,
+        amount: o.amount,
+        status: o.status as string,
+        lastEvent: o.events[0]?.note ?? null,
       })),
     };
   });

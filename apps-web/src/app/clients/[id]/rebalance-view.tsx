@@ -5,8 +5,12 @@ import {
   generateRebalancePlanAction,
   approveRebalancePlanAction,
   rejectRebalancePlanAction,
+  createRebalanceOrdersAction,
+  submitRebalanceOrdersAction,
+  fillRebalanceOrdersAction,
 } from "./rebalance-actions";
 import { statusLabel, nextStepLabel, type ApprovalStatus } from "@/lib/approval";
+import { EXECUTION_STATUS_LABELS, type ExecutionStatus } from "@/lib/execution";
 
 const pct = (v: number) => (v * 100).toFixed(1) + "%";
 const money = (v: number) => "$" + v.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -47,13 +51,33 @@ type Event = {
   createdAt: string;
 };
 
+type OrderUI = {
+  id: string;
+  productName: string;
+  side: string;
+  amount: number;
+  status: string;
+  lastEvent: string | null;
+};
+
 type Plan = {
   id: string;
+  clientId: string;
   status: string;
   summary: PlanSummary;
   createdAt: string;
   trades: Trade[];
   events: Event[];
+  orders: OrderUI[];
+};
+
+const ORDER_STATUS_COLORS: Record<string, string> = {
+  CREATED: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+  SUBMITTED: "bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+  PARTIALLY_FILLED: "bg-yellow-50 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
+  FILLED: "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300",
+  REJECTED: "bg-red-50 text-red-700 dark:bg-red-900 dark:text-red-300",
+  CANCELLED: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500",
 };
 
 export function RebalanceGenerateButton({ clientId }: { clientId: string }) {
@@ -92,35 +116,30 @@ export function RebalancePlanCard({ plan }: { plan: Plan }) {
   const totalSell = sells.reduce((s, t) => s + t.amount, 0);
   const totalBuy = buys.reduce((s, t) => s + t.amount, 0);
 
-  const handleApprove = () => {
+  const handleAction = (fn: () => Promise<{ error?: string }>) => {
     setError(null);
     startTransition(async () => {
-      const result = await approveRebalancePlanAction(plan.id);
+      const result = await fn();
       if (result.error) setError(result.error);
     });
   };
 
-  const handleReject = () => {
-    setError(null);
-    startTransition(async () => {
-      const result = await rejectRebalancePlanAction(plan.id);
-      if (result.error) setError(result.error);
-    });
-  };
-
-  const handleExportCSV = () => {
+  const handleExportTradesCSV = () => {
     const rows = [
       ["Side", "Product", "Amount", "Reason"],
       ...plan.trades.map((t) => [t.side, t.productName, t.amount.toFixed(2), t.reason]),
     ];
     const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `rebalance-${plan.id.slice(0, 8)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCSV(csv, `rebalance-trades-${plan.id.slice(0, 8)}.csv`);
+  };
+
+  const handleExportOrdersCSV = () => {
+    const rows = [
+      ["ClientId", "PlanId", "Product", "Side", "Amount", "Status"],
+      ...plan.orders.map((o) => [plan.clientId, plan.id, o.productName, o.side, o.amount.toFixed(2), o.status]),
+    ];
+    const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+    downloadCSV(csv, `rebalance-orders-${plan.id.slice(0, 8)}.csv`);
   };
 
   const statusColor: Record<string, string> = {
@@ -131,7 +150,12 @@ export function RebalancePlanCard({ plan }: { plan: Plan }) {
   };
 
   const canAct = plan.status === "DRAFT" || plan.status === "ADVISER_APPROVED";
+  const isApproved = plan.status === "CLIENT_APPROVED";
   const step = nextStepLabel(plan.status as ApprovalStatus);
+
+  const hasOrders = plan.orders.length > 0;
+  const hasCreatedOrders = plan.orders.some((o) => o.status === "CREATED");
+  const hasSubmittedOrders = plan.orders.some((o) => o.status === "SUBMITTED" || o.status === "PARTIALLY_FILLED");
 
   return (
     <div className="mt-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
@@ -144,12 +168,22 @@ export function RebalancePlanCard({ plan }: { plan: Plan }) {
             {new Date(plan.createdAt).toLocaleDateString()}
           </span>
         </div>
-        <button
-          onClick={handleExportCSV}
-          className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
-        >
-          Export CSV
-        </button>
+        <div className="flex gap-2">
+          {hasOrders && (
+            <button
+              onClick={handleExportOrdersCSV}
+              className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
+            >
+              Export orders CSV
+            </button>
+          )}
+          <button
+            onClick={handleExportTradesCSV}
+            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
+          >
+            Export trades CSV
+          </button>
+        </div>
       </div>
 
       {step && <p className="mt-1 text-xs text-zinc-400">{step}</p>}
@@ -228,23 +262,91 @@ export function RebalancePlanCard({ plan }: { plan: Plan }) {
         </div>
       )}
 
-      {/* Action buttons */}
+      {/* Approval action buttons */}
       {canAct && (
         <div className="mt-3 flex gap-2">
           <button
-            onClick={handleApprove}
+            onClick={() => handleAction(() => approveRebalancePlanAction(plan.id))}
             disabled={isPending}
             className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             {isPending ? "..." : "Approve"}
           </button>
           <button
-            onClick={handleReject}
+            onClick={() => handleAction(() => rejectRebalancePlanAction(plan.id))}
             disabled={isPending}
             className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
           >
             Reject
           </button>
+        </div>
+      )}
+
+      {/* Execution section — only for CLIENT_APPROVED plans */}
+      {isApproved && (
+        <div className="mt-4 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+          <p className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Execution</p>
+          <div className="mt-2 flex gap-2">
+            {!hasOrders && (
+              <button
+                onClick={() => handleAction(() => createRebalanceOrdersAction(plan.id))}
+                disabled={isPending}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                {isPending ? "..." : "Create orders"}
+              </button>
+            )}
+            {hasCreatedOrders && (
+              <button
+                onClick={() => handleAction(() => submitRebalanceOrdersAction(plan.id))}
+                disabled={isPending}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                {isPending ? "..." : "Simulate submit"}
+              </button>
+            )}
+            {hasSubmittedOrders && (
+              <button
+                onClick={() => handleAction(() => fillRebalanceOrdersAction(plan.id))}
+                disabled={isPending}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                {isPending ? "..." : "Simulate fills"}
+              </button>
+            )}
+          </div>
+
+          {/* Order blotter */}
+          {hasOrders && (
+            <table className="mt-3 w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                  <th className="pb-1 font-medium text-zinc-500">Side</th>
+                  <th className="pb-1 font-medium text-zinc-500">Product</th>
+                  <th className="pb-1 text-right font-medium text-zinc-500">Amount</th>
+                  <th className="pb-1 font-medium text-zinc-500">Status</th>
+                  <th className="pb-1 font-medium text-zinc-500">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.orders.map((o) => (
+                  <tr key={o.id} className="border-b border-zinc-100 dark:border-zinc-800">
+                    <td className={`py-1 font-medium ${o.side === "SELL" ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
+                      {o.side}
+                    </td>
+                    <td className="py-1 text-zinc-900 dark:text-zinc-100">{o.productName}</td>
+                    <td className="py-1 text-right text-zinc-900 dark:text-zinc-100">{money(o.amount)}</td>
+                    <td className="py-1">
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${ORDER_STATUS_COLORS[o.status] ?? ""}`}>
+                        {EXECUTION_STATUS_LABELS[o.status as ExecutionStatus] ?? o.status}
+                      </span>
+                    </td>
+                    <td className="py-1 text-zinc-400">{o.lastEvent ?? ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
@@ -281,4 +383,14 @@ function DriftTable({ title, rows }: { title: string; rows: DriftRow[] }) {
       </table>
     </div>
   );
+}
+
+function downloadCSV(csv: string, filename: string) {
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }

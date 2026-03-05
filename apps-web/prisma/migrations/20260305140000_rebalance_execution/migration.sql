@@ -1,0 +1,2 @@
+-- Add REBALANCE_PLAN to OrderSource enum
+ALTER TYPE "OrderSource" ADD VALUE 'REBALANCE_PLAN';

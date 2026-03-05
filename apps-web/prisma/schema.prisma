@@ -403,6 +403,7 @@ enum ExecutionStatus {
 
 enum OrderSource {
   SLEEVE_RECOMMENDATION
+  REBALANCE_PLAN
 }
 
 enum OrderSide {
