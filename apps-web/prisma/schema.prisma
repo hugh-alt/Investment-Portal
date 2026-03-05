@@ -20,8 +20,10 @@ model User {
   role      Role
   createdAt DateTime @default(now())
 
-  adviser    Adviser?
-  taxonomies Taxonomy[]
+  adviser          Adviser?
+  taxonomies       Taxonomy[]
+  stressScenarios  StressScenario[]
+  stressRuns       StressRun[]
 }
 
 model Adviser {
@@ -41,11 +43,12 @@ model Client {
   name      String
   createdAt DateTime @default(now())
 
-  adviser      Adviser       @relation(fields: [adviserId], references: [id])
-  accounts     Account[]
-  clientSAA    ClientSAA?
-  clientSleeve ClientSleeve?
-  orders       Order[]
+  adviser        Adviser        @relation(fields: [adviserId], references: [id])
+  accounts       Account[]
+  clientSAA      ClientSAA?
+  clientSleeve   ClientSleeve?
+  orders         Order[]
+  stressResults  StressResult[]
 }
 
 // ── Platform / Holdings ─────────────────────────────────
@@ -221,6 +224,7 @@ model TaxonomyNode {
   children       TaxonomyNode[]       @relation("NodeTree")
   productMaps    ProductTaxonomyMap[]
   saaAllocations SAAAllocation[]
+  stressShocks   StressShock[]
 }
 
 // ── Private Markets ──────────────────────────────────────
@@ -452,4 +456,52 @@ model SleeveLiquidPosition {
 
   sleeve  ClientSleeve @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
   product Product      @relation(fields: [productId], references: [id])
+}
+
+// ── Stress Testing ──────────────────────────────────────
+
+model StressScenario {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  createdBy User          @relation(fields: [createdByUserId], references: [id])
+  shocks    StressShock[]
+  runs      StressRun[]
+}
+
+model StressShock {
+  id              String @id @default(cuid())
+  scenarioId      String
+  taxonomyNodeId  String
+  shockPct        Float  // e.g. -0.30 for -30%
+
+  scenario StressScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  node     TaxonomyNode   @relation(fields: [taxonomyNodeId], references: [id])
+
+  @@unique([scenarioId, taxonomyNodeId])
+}
+
+model StressRun {
+  id           String   @id @default(cuid())
+  scenarioId   String
+  runByUserId  String
+  runAt        DateTime @default(now())
+
+  scenario StressScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  runBy    User           @relation(fields: [runByUserId], references: [id])
+  results  StressResult[]
+}
+
+model StressResult {
+  id                String @id @default(cuid())
+  stressRunId       String
+  clientId          String
+  estimatedImpactPct Float  // e.g. -0.15 for -15%
+  detailsJson       String // JSON breakdown
+
+  run    StressRun @relation(fields: [stressRunId], references: [id], onDelete: Cascade)
+  client Client    @relation(fields: [clientId], references: [id])
 }
