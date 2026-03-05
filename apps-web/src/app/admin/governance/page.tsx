@@ -10,6 +10,7 @@ import type { CommitmentInput } from "@/lib/sleeve";
 import {
   buildClientDriftRows,
   buildSleeveGovernanceRows,
+  buildRebalanceGovernanceRows,
   computeSummary,
 } from "@/lib/governance";
 import { GovernanceDashboard } from "./governance-tables";
@@ -240,7 +241,66 @@ export default async function GovernancePage() {
     0,
   );
 
-  const summary = computeSummary(driftRows, sleeveRows, pendingApprovals);
+  // ── Rebalance governance ──
+  // Fetch latest rebalance plan per client + associated orders
+  const allPlans = await prisma.rebalancePlan.findMany({
+    orderBy: { createdAt: "desc" },
+    include: {
+      trades: { select: { id: true } },
+    },
+  });
+
+  // Group by client, take most recent
+  const latestPlanByClient = new Map<string, typeof allPlans[number]>();
+  for (const plan of allPlans) {
+    if (!latestPlanByClient.has(plan.clientId)) {
+      latestPlanByClient.set(plan.clientId, plan);
+    }
+  }
+
+  // Fetch orders for the latest plans
+  const latestPlanIds = [...latestPlanByClient.values()].map((p) => p.id);
+  const rebalanceOrders = latestPlanIds.length > 0
+    ? await prisma.order.findMany({
+        where: { sourceId: { in: latestPlanIds }, source: "REBALANCE_PLAN" },
+        select: { sourceId: true, status: true },
+      })
+    : [];
+
+  const ordersByPlanId = new Map<string, { status: string }[]>();
+  for (const o of rebalanceOrders) {
+    const list = ordersByPlanId.get(o.sourceId) ?? [];
+    list.push({ status: o.status });
+    ordersByPlanId.set(o.sourceId, list);
+  }
+
+  // Count orders pending fill across all rebalance plans
+  const rebalanceOrdersPendingFill = rebalanceOrders.filter(
+    (o) => o.status === "SUBMITTED" || o.status === "PARTIALLY_FILLED",
+  ).length;
+
+  const rebalanceInputs = clients.map((c) => {
+    const plan = latestPlanByClient.get(c.id);
+    return {
+      clientId: c.id,
+      clientName: c.name,
+      adviserName: c.adviser.user.name,
+      adviserId: c.adviserId,
+      breachCount: driftByClient.get(c.id)?.breachCount ?? 0,
+      latestPlan: plan
+        ? {
+            status: plan.status,
+            tradeCount: plan.trades.length,
+            createdAt: plan.createdAt.toISOString(),
+          }
+        : null,
+      orders: plan ? (ordersByPlanId.get(plan.id) ?? []) : [],
+    };
+  });
+
+  const rebalanceRows = buildRebalanceGovernanceRows(rebalanceInputs);
+
+  const summary = computeSummary(driftRows, sleeveRows, pendingApprovals, rebalanceRows, rebalanceOrdersPendingFill);
 
   // Build adviser list for filter dropdown
   const adviserMap = new Map<string, string>();
@@ -257,7 +317,7 @@ export default async function GovernancePage() {
         Governance Overview
       </h1>
       <p className="mt-2 text-sm text-zinc-500">
-        Firm-wide drift, liquidity, and approval status at a glance.
+        Firm-wide drift, liquidity, rebalance, and approval status at a glance.
       </p>
 
       <div className="mt-6">
@@ -265,6 +325,7 @@ export default async function GovernancePage() {
           summary={summary}
           driftRows={driftRows}
           sleeveRows={sleeveRows}
+          rebalanceRows={rebalanceRows}
           advisers={advisers}
         />
       </div>

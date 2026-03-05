@@ -14,7 +14,8 @@
       "Bash(npx vitest:*)",
       "Bash(npx tsc:*)",
       "Bash(PGPASSWORD=postgres psql:*)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(rm:*)"
     ]
   }
 }

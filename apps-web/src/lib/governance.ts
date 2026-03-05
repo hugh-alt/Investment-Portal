@@ -28,11 +28,27 @@ export type SleeveGovernanceRow = {
   activeAlertCount: number;
 };
 
+export type RebalanceGovernanceRow = {
+  clientId: string;
+  clientName: string;
+  adviserName: string;
+  adviserId: string;
+  breachCount: number;
+  latestPlanStatus: string | null;   // DRAFT, ADVISER_APPROVED, CLIENT_APPROVED, REJECTED, or null
+  tradeCount: number;
+  ordersSummary: string;             // e.g. "3 filled / 1 submitted" or "—"
+  lastUpdated: string | null;        // ISO string
+};
+
 export type GovernanceSummary = {
   totalClients: number;
   clientsOutOfTolerance: number;
   sleevesWarnOrCritical: number;
   pendingApprovals: number;
+  rebalanceDraft: number;
+  rebalanceAdviserApproved: number;
+  rebalanceClientApproved: number;
+  rebalanceOrdersPendingFill: number;
 };
 
 export function buildClientDriftRows(
@@ -76,10 +92,56 @@ export function buildSleeveGovernanceRows(
   }));
 }
 
+export type RebalanceGovernanceInput = {
+  clientId: string;
+  clientName: string;
+  adviserName: string;
+  adviserId: string;
+  breachCount: number;
+  latestPlan: {
+    status: string;
+    tradeCount: number;
+    createdAt: string;
+  } | null;
+  orders: { status: string }[];
+};
+
+export function summarizeOrders(orders: { status: string }[]): string {
+  if (orders.length === 0) return "—";
+  const counts = new Map<string, number>();
+  for (const o of orders) {
+    counts.set(o.status, (counts.get(o.status) ?? 0) + 1);
+  }
+  const parts: string[] = [];
+  for (const [status, count] of counts) {
+    const label = status.toLowerCase().replace(/_/g, " ");
+    parts.push(`${count} ${label}`);
+  }
+  return parts.join(" / ");
+}
+
+export function buildRebalanceGovernanceRows(
+  inputs: RebalanceGovernanceInput[],
+): RebalanceGovernanceRow[] {
+  return inputs.map((inp) => ({
+    clientId: inp.clientId,
+    clientName: inp.clientName,
+    adviserName: inp.adviserName,
+    adviserId: inp.adviserId,
+    breachCount: inp.breachCount,
+    latestPlanStatus: inp.latestPlan?.status ?? null,
+    tradeCount: inp.latestPlan?.tradeCount ?? 0,
+    ordersSummary: summarizeOrders(inp.orders),
+    lastUpdated: inp.latestPlan?.createdAt ?? null,
+  }));
+}
+
 export function computeSummary(
   driftRows: ClientDriftRow[],
   sleeveRows: SleeveGovernanceRow[],
   pendingApprovals: number,
+  rebalanceRows: RebalanceGovernanceRow[] = [],
+  rebalanceOrdersPendingFill: number = 0,
 ): GovernanceSummary {
   return {
     totalClients: driftRows.length,
@@ -88,5 +150,9 @@ export function computeSummary(
       (r) => r.severity === "WARN" || r.severity === "CRITICAL",
     ).length,
     pendingApprovals,
+    rebalanceDraft: rebalanceRows.filter((r) => r.latestPlanStatus === "DRAFT").length,
+    rebalanceAdviserApproved: rebalanceRows.filter((r) => r.latestPlanStatus === "ADVISER_APPROVED").length,
+    rebalanceClientApproved: rebalanceRows.filter((r) => r.latestPlanStatus === "CLIENT_APPROVED").length,
+    rebalanceOrdersPendingFill,
   };
 }

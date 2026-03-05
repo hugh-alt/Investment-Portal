@@ -2,7 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { ClientDriftRow, SleeveGovernanceRow, GovernanceSummary } from "@/lib/governance";
+import type {
+  ClientDriftRow,
+  SleeveGovernanceRow,
+  RebalanceGovernanceRow,
+  GovernanceSummary,
+} from "@/lib/governance";
+import { formatDate } from "@/lib/format";
 
 const pct = (v: number) => (v * 100).toFixed(1) + "%";
 const fmt = (v: number) =>
@@ -13,6 +19,22 @@ const SEVERITY_COLORS: Record<string, string> = {
   WARN: "bg-yellow-50 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
   CRITICAL: "bg-red-50 text-red-700 dark:bg-red-900 dark:text-red-300",
 };
+
+const PLAN_STATUS_COLORS: Record<string, string> = {
+  DRAFT: "bg-yellow-50 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
+  ADVISER_APPROVED: "bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+  CLIENT_APPROVED: "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300",
+  REJECTED: "bg-red-50 text-red-700 dark:bg-red-900 dark:text-red-300",
+};
+
+const PLAN_STATUS_LABELS: Record<string, string> = {
+  DRAFT: "Draft",
+  ADVISER_APPROVED: "Adviser Approved",
+  CLIENT_APPROVED: "Client Approved",
+  REJECTED: "Rejected",
+};
+
+type RebalanceFilter = "ANY" | "NEEDS_ACTION" | "AWAITING_CLIENT" | "EXECUTING";
 
 function SummaryTile({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
   return (
@@ -29,16 +51,19 @@ export function GovernanceDashboard({
   summary,
   driftRows,
   sleeveRows,
+  rebalanceRows,
   advisers,
 }: {
   summary: GovernanceSummary;
   driftRows: ClientDriftRow[];
   sleeveRows: SleeveGovernanceRow[];
+  rebalanceRows: RebalanceGovernanceRow[];
   advisers: { id: string; name: string }[];
 }) {
   const [adviserFilter, setAdviserFilter] = useState("ALL");
   const [breachOnly, setBreachOnly] = useState(false);
   const [warnCritOnly, setWarnCritOnly] = useState(false);
+  const [rebalanceFilter, setRebalanceFilter] = useState<RebalanceFilter>("ANY");
 
   const filteredDrift = driftRows.filter((r) => {
     if (adviserFilter !== "ALL" && r.adviserId !== adviserFilter) return false;
@@ -52,6 +77,20 @@ export function GovernanceDashboard({
     return true;
   });
 
+  const filteredRebalance = rebalanceRows.filter((r) => {
+    if (adviserFilter !== "ALL" && r.adviserId !== adviserFilter) return false;
+    if (rebalanceFilter === "NEEDS_ACTION") {
+      return r.latestPlanStatus === "DRAFT" || (r.breachCount > 0 && !r.latestPlanStatus);
+    }
+    if (rebalanceFilter === "AWAITING_CLIENT") {
+      return r.latestPlanStatus === "ADVISER_APPROVED";
+    }
+    if (rebalanceFilter === "EXECUTING") {
+      return r.latestPlanStatus === "CLIENT_APPROVED";
+    }
+    return true;
+  });
+
   return (
     <div>
       {/* Summary tiles */}
@@ -60,6 +99,14 @@ export function GovernanceDashboard({
         <SummaryTile label="Out of tolerance" value={summary.clientsOutOfTolerance} accent />
         <SummaryTile label="Sleeves WARN / CRITICAL" value={summary.sleevesWarnOrCritical} accent />
         <SummaryTile label="Pending approvals" value={summary.pendingApprovals} accent />
+      </div>
+
+      {/* Rebalance summary tiles */}
+      <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-5">
+        <SummaryTile label="Rebalance: Draft" value={summary.rebalanceDraft} accent />
+        <SummaryTile label="Rebalance: Adviser Approved" value={summary.rebalanceAdviserApproved} accent />
+        <SummaryTile label="Rebalance: Client Approved" value={summary.rebalanceClientApproved} />
+        <SummaryTile label="Rebalance: Orders pending fill" value={summary.rebalanceOrdersPendingFill} accent />
       </div>
 
       {/* Shared filters */}
@@ -130,6 +177,92 @@ export function GovernanceDashboard({
                 </td>
                 <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
                   {r.hasSAA ? pct(r.maxAbsDrift) : "—"}
+                </td>
+                <td className="py-2 text-right">
+                  <Link
+                    href={`/clients/${r.clientId}`}
+                    className="text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100"
+                  >
+                    View
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Rebalance Workflow table */}
+      <div className="mt-8">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+            Rebalance Workflow
+          </h2>
+          <label className="text-sm text-zinc-600 dark:text-zinc-400">
+            Status
+            <select
+              value={rebalanceFilter}
+              onChange={(e) => setRebalanceFilter(e.target.value as RebalanceFilter)}
+              className="ml-2 rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              <option value="ANY">Any</option>
+              <option value="NEEDS_ACTION">Needs action</option>
+              <option value="AWAITING_CLIENT">Awaiting client</option>
+              <option value="EXECUTING">Executing</option>
+            </select>
+          </label>
+        </div>
+        <table className="mt-3 w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+              <th className="pb-2 font-medium text-zinc-500">Client</th>
+              <th className="pb-2 font-medium text-zinc-500">Adviser</th>
+              <th className="pb-2 text-right font-medium text-zinc-500">Out-of-tolerance</th>
+              <th className="pb-2 font-medium text-zinc-500">Plan status</th>
+              <th className="pb-2 text-right font-medium text-zinc-500">Trades</th>
+              <th className="pb-2 font-medium text-zinc-500">Orders</th>
+              <th className="pb-2 font-medium text-zinc-500">Last updated</th>
+              <th className="pb-2 font-medium text-zinc-500"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRebalance.length === 0 && (
+              <tr>
+                <td colSpan={8} className="py-4 text-center text-zinc-400">
+                  No clients match filters
+                </td>
+              </tr>
+            )}
+            {filteredRebalance.map((r) => (
+              <tr key={r.clientId} className="border-b border-zinc-100 dark:border-zinc-800">
+                <td className="py-2 text-zinc-900 dark:text-zinc-100">{r.clientName}</td>
+                <td className="py-2 text-zinc-600 dark:text-zinc-400">{r.adviserName}</td>
+                <td className="py-2 text-right">
+                  {r.breachCount > 0 ? (
+                    <span className="font-medium text-red-600 dark:text-red-400">{r.breachCount}</span>
+                  ) : (
+                    <span className="text-zinc-400">0</span>
+                  )}
+                </td>
+                <td className="py-2">
+                  {r.latestPlanStatus ? (
+                    <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${PLAN_STATUS_COLORS[r.latestPlanStatus] ?? ""}`}>
+                      {PLAN_STATUS_LABELS[r.latestPlanStatus] ?? r.latestPlanStatus}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-400">No plan</span>
+                  )}
+                </td>
+                <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
+                  {r.tradeCount > 0 ? r.tradeCount : "—"}
+                </td>
+                <td className="py-2 text-zinc-600 dark:text-zinc-400">
+                  {r.ordersSummary}
+                </td>
+                <td className="py-2 text-zinc-500">
+                  {r.lastUpdated
+                    ? formatDate(r.lastUpdated)
+                    : "—"}
                 </td>
                 <td className="py-2 text-right">
                   <Link
