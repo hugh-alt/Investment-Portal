@@ -2,10 +2,14 @@
 
 import { useState, useActionState } from "react";
 import type { SleeveTotals, CurrencyTotals } from "@/lib/sleeve";
+import type { LiquidityAssessment, BufferConfig } from "@/lib/liquidity";
+import type { SellRecommendation, BuyRecommendation, SellWaterfallEntry, BuyWaterfallEntry } from "@/lib/waterfall";
 import {
   createSleeveAction,
   addCommitmentAction,
   addLiquidPositionAction,
+  updateBufferConfigAction,
+  updateWaterfallConfigAction,
   type SleeveFormState,
 } from "./sleeve-actions";
 
@@ -87,6 +91,13 @@ export function CreateSleeveForm({ clientId }: { clientId: string }) {
 
 // ── Sleeve Summary ──────────────────────────────────────
 
+type AlertInfo = {
+  id: string;
+  severity: string;
+  message: string;
+  createdAt: string;
+};
+
 export function SleeveSummary({
   sleeveName,
   targetPct,
@@ -98,6 +109,14 @@ export function SleeveSummary({
   sleeveId,
   approvedFunds,
   products,
+  bufferConfig,
+  liquidityAssessment,
+  activeAlerts,
+  sellRecommendation,
+  buyRecommendation,
+  sellWaterfall,
+  buyWaterfall,
+  minTradeAmount,
 }: {
   sleeveName: string;
   targetPct: number | null;
@@ -108,7 +127,15 @@ export function SleeveSummary({
   clientId: string;
   sleeveId: string;
   approvedFunds: { id: string; name: string; currency: string }[];
-  products: { id: string; name: string }[];
+  products: { id: string; name: string; type: string }[];
+  bufferConfig: BufferConfig;
+  liquidityAssessment: LiquidityAssessment;
+  activeAlerts: AlertInfo[];
+  sellRecommendation: SellRecommendation | null;
+  buyRecommendation: BuyRecommendation | null;
+  sellWaterfall: SellWaterfallEntry[];
+  buyWaterfall: BuyWaterfallEntry[];
+  minTradeAmount: number;
 }) {
   const [expandedFund, setExpandedFund] = useState<string | null>(null);
 
@@ -196,6 +223,33 @@ export function SleeveSummary({
           </div>
         </div>
       )}
+
+      {/* Liquidity Health */}
+      <LiquidityHealthCard
+        assessment={liquidityAssessment}
+        bufferConfig={bufferConfig}
+        activeAlerts={activeAlerts}
+        clientId={clientId}
+        sleeveId={sleeveId}
+      />
+
+      {/* Recommended Actions */}
+      {(sellRecommendation || buyRecommendation) && (
+        <RecommendedActionsPanel
+          sellRecommendation={sellRecommendation}
+          buyRecommendation={buyRecommendation}
+        />
+      )}
+
+      {/* Waterfall Config */}
+      <WaterfallConfigPanel
+        clientId={clientId}
+        sleeveId={sleeveId}
+        sellWaterfall={sellWaterfall}
+        buyWaterfall={buyWaterfall}
+        minTradeAmount={minTradeAmount}
+        products={products}
+      />
 
       {/* Add forms */}
       <div className="grid gap-4 sm:grid-cols-2">
@@ -346,6 +400,477 @@ function SummaryCard({ label, value, small }: { label: string; value: string; sm
   );
 }
 
+// ── Liquidity Health Card ────────────────────────────────
+
+const severityStyles = {
+  OK: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
+  WARN: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+  CRITICAL: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300",
+};
+
+function LiquidityHealthCard({
+  assessment,
+  bufferConfig,
+  activeAlerts,
+  clientId,
+  sleeveId,
+}: {
+  assessment: LiquidityAssessment;
+  bufferConfig: BufferConfig;
+  activeAlerts: AlertInfo[];
+  clientId: string;
+  sleeveId: string;
+}) {
+  const [showConfig, setShowConfig] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Liquidity Health</h4>
+        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${severityStyles[assessment.severity]}`}>
+          {assessment.severity}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div>
+          <p className="text-xs text-zinc-500">Required ({assessment.portfolioCurrency})</p>
+          <p className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{fmt(assessment.totalRequired)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500">Liquid Bucket</p>
+          <p className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{fmt(assessment.liquidBucketValue)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500">Shortfall</p>
+          <p className={`text-base font-semibold ${assessment.shortfall > 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
+            {assessment.shortfall > 0 ? fmt(assessment.shortfall) : "None"}
+          </p>
+        </div>
+      </div>
+
+      {/* Per-currency requirements */}
+      {assessment.requirements.length > 1 && (
+        <div className="mt-3">
+          <p className="text-xs text-zinc-500">Required by currency:</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {assessment.requirements.map((r) => (
+              <span key={r.currency} className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                {r.currency}: {fmt(r.requiredLiquidity)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Non-covered currency warning */}
+      {assessment.nonCoveredCurrencies.length > 0 && (
+        <p className="mt-2 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+          No liquid coverage for {assessment.nonCoveredCurrencies.join(", ")} commitments — liquid bucket is {assessment.portfolioCurrency} only
+        </p>
+      )}
+
+      {/* Active alerts */}
+      {activeAlerts.length > 0 && (
+        <div className="mt-3 space-y-1">
+          <p className="text-xs font-medium text-zinc-500">Active Alerts</p>
+          {activeAlerts.map((a) => (
+            <div key={a.id} className={`rounded px-2 py-1.5 text-xs ${severityStyles[a.severity as keyof typeof severityStyles] ?? "bg-zinc-100 text-zinc-600"}`}>
+              {a.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Buffer config toggle */}
+      <div className="mt-3 flex items-center gap-2">
+        <p className="text-xs text-zinc-400">
+          Method: {bufferConfig.bufferMethod === "VS_UNFUNDED_PCT"
+            ? `${(bufferConfig.bufferPctOfUnfunded * 100).toFixed(0)}% of unfunded`
+            : `${bufferConfig.bufferMonthsForward}mo projected calls`}
+        </p>
+        <button
+          onClick={() => setShowConfig(!showConfig)}
+          className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+        >
+          {showConfig ? "Hide" : "Configure"}
+        </button>
+      </div>
+
+      {showConfig && (
+        <BufferConfigForm
+          clientId={clientId}
+          sleeveId={sleeveId}
+          bufferConfig={bufferConfig}
+        />
+      )}
+    </div>
+  );
+}
+
+function BufferConfigForm({
+  clientId,
+  sleeveId,
+  bufferConfig,
+}: {
+  clientId: string;
+  sleeveId: string;
+  bufferConfig: BufferConfig;
+}) {
+  const [state, action, pending] = useActionState<SleeveFormState, FormData>(
+    updateBufferConfigAction,
+    {},
+  );
+
+  return (
+    <form action={action} className="mt-2 rounded border border-zinc-200 p-3 dark:border-zinc-700">
+      <input type="hidden" name="clientId" value={clientId} />
+      <input type="hidden" name="sleeveId" value={sleeveId} />
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Method</label>
+          <select
+            name="bufferMethod"
+            defaultValue={bufferConfig.bufferMethod}
+            className="mt-1 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          >
+            <option value="VS_UNFUNDED_PCT">% of Unfunded</option>
+            <option value="VS_PROJECTED_CALLS">Projected Calls</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Buffer %</label>
+          <input
+            name="bufferPctOfUnfunded"
+            type="number"
+            step="1"
+            min="0"
+            max="100"
+            defaultValue={(bufferConfig.bufferPctOfUnfunded * 100).toFixed(0)}
+            className="mt-1 w-20 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Months Forward</label>
+          <input
+            name="bufferMonthsForward"
+            type="number"
+            step="1"
+            min="1"
+            max="36"
+            defaultValue={bufferConfig.bufferMonthsForward}
+            className="mt-1 w-20 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            name="alertEnabled"
+            defaultChecked
+            className="rounded border-zinc-300"
+          />
+          <label className="text-xs text-zinc-600 dark:text-zinc-400">Alerts</label>
+        </div>
+        <button
+          type="submit"
+          disabled={pending}
+          className="rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          {pending ? "Saving..." : "Save"}
+        </button>
+      </div>
+      {state.error && <p className="mt-1 text-xs text-red-600">{state.error}</p>}
+      {state.success && <p className="mt-1 text-xs text-green-600">Saved.</p>}
+    </form>
+  );
+}
+
+// ── Recommended Actions Panel ────────────────────────────
+
+function RecommendedActionsPanel({
+  sellRecommendation,
+  buyRecommendation,
+}: {
+  sellRecommendation: SellRecommendation | null;
+  buyRecommendation: BuyRecommendation | null;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Recommended Actions</h4>
+
+      {sellRecommendation && (
+        <div className="mt-3">
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-300">
+              RAISE LIQUIDITY
+            </span>
+            <span className="text-sm text-zinc-600 dark:text-zinc-400">{sellRecommendation.summary}</span>
+          </div>
+          <div className="mt-2 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Action</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Product</th>
+                  <th className="px-3 py-1.5 text-right text-xs font-medium text-zinc-500">Amount</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sellRecommendation.legs.map((leg, i) => (
+                  <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
+                    <td className="px-3 py-1.5">
+                      <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300">SELL</span>
+                    </td>
+                    <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-100">{leg.productName}</td>
+                    <td className="px-3 py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmt(leg.amount)}</td>
+                    <td className="px-3 py-1.5 text-xs text-zinc-500">{leg.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {buyRecommendation && (
+        <div className="mt-3">
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-300">
+              INVEST EXCESS
+            </span>
+            <span className="text-sm text-zinc-600 dark:text-zinc-400">{buyRecommendation.summary}</span>
+          </div>
+          <div className="mt-2 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Action</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Product</th>
+                  <th className="px-3 py-1.5 text-right text-xs font-medium text-zinc-500">Amount</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {buyRecommendation.legs.map((leg, i) => (
+                  <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
+                    <td className="px-3 py-1.5">
+                      <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-300">BUY</span>
+                    </td>
+                    <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-100">{leg.productName}</td>
+                    <td className="px-3 py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmt(leg.amount)}</td>
+                    <td className="px-3 py-1.5 text-xs text-zinc-500">{leg.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Waterfall Config Panel ──────────────────────────────
+
+type SellItem = { productId: string; maxSellPct: number };
+type BuyItem = { productId: string; maxBuyPct: number };
+
+function WaterfallConfigPanel({
+  clientId,
+  sleeveId,
+  sellWaterfall,
+  buyWaterfall,
+  minTradeAmount,
+  products,
+}: {
+  clientId: string;
+  sleeveId: string;
+  sellWaterfall: SellWaterfallEntry[];
+  buyWaterfall: BuyWaterfallEntry[];
+  minTradeAmount: number;
+  products: { id: string; name: string; type: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [sellItems, setSellItems] = useState<SellItem[]>(
+    sellWaterfall.map((e) => ({ productId: e.productId, maxSellPct: e.maxSellPct })),
+  );
+  const [buyItems, setBuyItems] = useState<BuyItem[]>(
+    buyWaterfall.map((e) => ({ productId: e.productId, maxBuyPct: e.maxBuyPct })),
+  );
+  const [search, setSearch] = useState("");
+  const [state, action, pending] = useActionState<SleeveFormState, FormData>(
+    updateWaterfallConfigAction,
+    {},
+  );
+
+  const productMap = new Map(products.map((p) => [p.id, p]));
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+      >
+        Configure Waterfalls
+      </button>
+    );
+  }
+
+  const filteredProducts = search.length > 0
+    ? products.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
+    : products;
+
+  return (
+    <form action={action} className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <input type="hidden" name="clientId" value={clientId} />
+      <input type="hidden" name="sleeveId" value={sleeveId} />
+      <input type="hidden" name="sellWaterfallJson" value={JSON.stringify(sellItems)} />
+      <input type="hidden" name="buyWaterfallJson" value={JSON.stringify(buyItems)} />
+
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Waterfall Configuration</h4>
+        <button type="button" onClick={() => setOpen(false)} className="text-xs text-zinc-500 hover:text-zinc-700">Close</button>
+      </div>
+
+      {/* Product search for adding */}
+      <div className="mt-3">
+        <input
+          type="text"
+          placeholder="Search products to add..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+        />
+      </div>
+
+      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+        {/* Sell waterfall */}
+        <div>
+          <p className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Sell Waterfall (shortfall)</p>
+          <div className="mt-1 space-y-1">
+            {sellItems.map((item, i) => {
+              const prod = productMap.get(item.productId);
+              return (
+                <div key={item.productId} className="flex items-center gap-1.5 rounded bg-zinc-50 px-2 py-1.5 dark:bg-zinc-800">
+                  <span className="text-xs text-zinc-400">{i + 1}.</span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs text-zinc-700 dark:text-zinc-300 truncate block">{prod?.name ?? item.productId}</span>
+                    {prod && <span className="text-[10px] text-zinc-400">{prod.type}</span>}
+                  </div>
+                  <div className="flex items-center gap-0.5">
+                    {item.maxSellPct === 0 ? (
+                      <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">Do not sell</span>
+                    ) : (
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={(item.maxSellPct * 100).toFixed(0)}
+                        onChange={(e) => {
+                          const next = [...sellItems];
+                          next[i] = { ...next[i], maxSellPct: Math.min(1, Math.max(0, parseFloat(e.target.value) / 100)) };
+                          setSellItems(next);
+                        }}
+                        className="w-14 rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                      />
+                    )}
+                    <span className="text-[10px] text-zinc-400">%</span>
+                  </div>
+                  <button type="button" onClick={() => { const n = [...sellItems]; n[i] = { ...n[i], maxSellPct: item.maxSellPct === 0 ? 1.0 : 0 }; setSellItems(n); }} className="text-[10px] text-zinc-400 hover:text-zinc-600" title={item.maxSellPct === 0 ? "Allow selling" : "Set do-not-sell"}>
+                    {item.maxSellPct === 0 ? "Allow" : "Block"}
+                  </button>
+                  <button type="button" onClick={() => { const n = [...sellItems]; if (i > 0) { [n[i-1], n[i]] = [n[i], n[i-1]]; } setSellItems(n); }} disabled={i === 0} className="text-xs text-zinc-400 hover:text-zinc-600">&#9650;</button>
+                  <button type="button" onClick={() => { const n = [...sellItems]; if (i < n.length-1) { [n[i], n[i+1]] = [n[i+1], n[i]]; } setSellItems(n); }} disabled={i >= sellItems.length - 1} className="text-xs text-zinc-400 hover:text-zinc-600">&#9660;</button>
+                  <button type="button" onClick={() => setSellItems(sellItems.filter((_, idx) => idx !== i))} className="text-xs text-red-400 hover:text-red-600">&#10005;</button>
+                </div>
+              );
+            })}
+          </div>
+          <select
+            onChange={(e) => {
+              if (e.target.value && !sellItems.some((s) => s.productId === e.target.value)) {
+                setSellItems([...sellItems, { productId: e.target.value, maxSellPct: 1.0 }]);
+              }
+              e.target.value = "";
+            }}
+            className="mt-1 rounded border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+            defaultValue=""
+          >
+            <option value="" disabled>+ Add product...</option>
+            {filteredProducts.filter((p) => !sellItems.some((s) => s.productId === p.id)).map((p) => (
+              <option key={p.id} value={p.id}>{p.name} ({p.type})</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Buy waterfall */}
+        <div>
+          <p className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Buy Waterfall (excess)</p>
+          <div className="mt-1 space-y-1">
+            {buyItems.map((item, i) => {
+              const prod = productMap.get(item.productId);
+              return (
+                <div key={item.productId} className="flex items-center gap-1.5 rounded bg-zinc-50 px-2 py-1.5 dark:bg-zinc-800">
+                  <span className="text-xs text-zinc-400">{i + 1}.</span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs text-zinc-700 dark:text-zinc-300 truncate block">{prod?.name ?? item.productId}</span>
+                    {prod && <span className="text-[10px] text-zinc-400">{prod.type}</span>}
+                  </div>
+                  <button type="button" onClick={() => { const n = [...buyItems]; if (i > 0) { [n[i-1], n[i]] = [n[i], n[i-1]]; } setBuyItems(n); }} disabled={i === 0} className="text-xs text-zinc-400 hover:text-zinc-600">&#9650;</button>
+                  <button type="button" onClick={() => { const n = [...buyItems]; if (i < n.length-1) { [n[i], n[i+1]] = [n[i+1], n[i]]; } setBuyItems(n); }} disabled={i >= buyItems.length - 1} className="text-xs text-zinc-400 hover:text-zinc-600">&#9660;</button>
+                  <button type="button" onClick={() => setBuyItems(buyItems.filter((_, idx) => idx !== i))} className="text-xs text-red-400 hover:text-red-600">&#10005;</button>
+                </div>
+              );
+            })}
+          </div>
+          <select
+            onChange={(e) => {
+              if (e.target.value && !buyItems.some((b) => b.productId === e.target.value)) {
+                setBuyItems([...buyItems, { productId: e.target.value, maxBuyPct: 1.0 }]);
+              }
+              e.target.value = "";
+            }}
+            className="mt-1 rounded border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+            defaultValue=""
+          >
+            <option value="" disabled>+ Add product...</option>
+            {filteredProducts.filter((p) => !buyItems.some((b) => b.productId === p.id)).map((p) => (
+              <option key={p.id} value={p.id}>{p.name} ({p.type})</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Min Trade Amount ($)</label>
+        <input
+          name="minTradeAmount"
+          type="number"
+          step="100"
+          min="0"
+          defaultValue={minTradeAmount}
+          className="mt-1 w-32 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+        />
+      </div>
+
+      {state.error && <p className="mt-2 text-xs text-red-600">{state.error}</p>}
+      {state.success && <p className="mt-2 text-xs text-green-600">Saved.</p>}
+
+      <div className="mt-3">
+        <button
+          type="submit"
+          disabled={pending}
+          className="rounded bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          {pending ? "Saving..." : "Save Waterfall Config"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 // ── Add Commitment Form ─────────────────────────────────
 
 function AddCommitmentForm({
@@ -416,7 +941,7 @@ function AddLiquidForm({
 }: {
   clientId: string;
   sleeveId: string;
-  products: { id: string; name: string }[];
+  products: { id: string; name: string; type: string }[];
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");

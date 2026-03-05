@@ -5,8 +5,26 @@ import { prisma } from "@/lib/prisma";
 import { MappingScope, SAAScope, TaxonomyNodeType } from "@/generated/prisma/enums";
 import { computeAllocation, type HoldingInput, type MappingInput } from "@/lib/allocation";
 import { computeDrift, type CurrentWeightInput, type TargetInput } from "@/lib/drift";
-import { computeSleeveTotals, type CommitmentInput } from "@/lib/sleeve";
+import { computeSleeveTotals, groupByCurrency, type CommitmentInput } from "@/lib/sleeve";
 import { curveCumToIncremental, scaleIncrementalPctToDollars, computeFundMetrics, type CurvePoint } from "@/lib/pm-curves";
+import {
+  computeRequiredVsUnfunded,
+  computeRequiredVsProjectedCalls,
+  assessLiquidity,
+  type ProjectedCall,
+  type LiquidityAssessment,
+  type BufferConfig,
+} from "@/lib/liquidity";
+import {
+  generateSellLegs,
+  generateBuyLegs,
+  computeExcess,
+  type WaterfallPosition,
+  type SellWaterfallEntry,
+  type BuyWaterfallEntry,
+  type SellRecommendation,
+  type BuyRecommendation,
+} from "@/lib/waterfall";
 import { HoldingsTable } from "./holdings-table";
 import { AllocationView } from "./allocation-view";
 import { SAASelector } from "./saa-selector";
@@ -419,7 +437,7 @@ async function SleeveSection({ clientId }: { clientId: string }) {
         },
       },
       liquidPositions: {
-        include: { product: { select: { name: true } } },
+        include: { product: { select: { id: true, name: true, type: true } } },
       },
     },
   });
@@ -488,6 +506,77 @@ async function SleeveSection({ clientId }: { clientId: string }) {
 
   const totals = computeSleeveTotals(commitmentInputs, liquidInputs);
 
+  // Compute liquidity health
+  const bufferConfig: BufferConfig = {
+    bufferMethod: sleeve.bufferMethod,
+    bufferPctOfUnfunded: sleeve.bufferPctOfUnfunded,
+    bufferMonthsForward: sleeve.bufferMonthsForward,
+  };
+
+  let liquidityAssessment: LiquidityAssessment;
+  if (bufferConfig.bufferMethod === "VS_UNFUNDED_PCT") {
+    const unfundedByCurrency = groupByCurrency(commitmentInputs).map((ct) => ({
+      currency: ct.currency,
+      totalUnfunded: ct.totalUnfunded,
+    }));
+    const requirements = computeRequiredVsUnfunded(unfundedByCurrency, bufferConfig.bufferPctOfUnfunded);
+    liquidityAssessment = assessLiquidity(requirements, totals.liquidBucketValue);
+  } else {
+    // VS_PROJECTED_CALLS: aggregate all projected calls across all commitments
+    const allCalls: ProjectedCall[] = commitmentDetails.flatMap((c) =>
+      c.projectedCalls.map((pc) => ({
+        currency: c.currency,
+        month: pc.month,
+        amount: pc.amount,
+      })),
+    );
+    const requirements = computeRequiredVsProjectedCalls(allCalls, bufferConfig.bufferMonthsForward);
+    liquidityAssessment = assessLiquidity(requirements, totals.liquidBucketValue);
+  }
+
+  // Fetch existing unresolved alerts
+  const activeAlerts = await prisma.sleeveAlert.findMany({
+    where: { clientSleeveId: sleeve.id, isResolved: false },
+    orderBy: { createdAt: "desc" },
+  });
+
+  // Build waterfall positions from liquid positions
+  const waterfallPositions: WaterfallPosition[] = sleeve.liquidPositions.map((p) => ({
+    productId: p.productId,
+    productName: p.product.name,
+    productType: p.product.type,
+    marketValue: p.marketValue,
+  }));
+
+  // Parse waterfall configs
+  let sellWaterfall: SellWaterfallEntry[] = [];
+  let buyWaterfall: BuyWaterfallEntry[] = [];
+  try { sellWaterfall = JSON.parse(sleeve.sellWaterfallJson); } catch { /* empty */ }
+  try { buyWaterfall = JSON.parse(sleeve.buyWaterfallJson); } catch { /* empty */ }
+
+  // Compute recommendations
+  let sellRecommendation: SellRecommendation | null = null;
+  let buyRecommendation: BuyRecommendation | null = null;
+
+  if (liquidityAssessment.shortfall > 0) {
+    sellRecommendation = generateSellLegs(
+      waterfallPositions,
+      sellWaterfall,
+      liquidityAssessment.shortfall,
+      sleeve.minTradeAmount,
+    );
+  } else {
+    const excess = computeExcess(liquidityAssessment.liquidBucketValue, liquidityAssessment.totalRequired);
+    if (excess > 0) {
+      buyRecommendation = generateBuyLegs(
+        waterfallPositions,
+        buyWaterfall,
+        excess,
+        sleeve.minTradeAmount,
+      );
+    }
+  }
+
   // Approved funds for the commitment form
   const approvedFunds = await prisma.pMFund.findMany({
     where: { approval: { isApproved: true } },
@@ -495,9 +584,9 @@ async function SleeveSection({ clientId }: { clientId: string }) {
     orderBy: { name: "asc" },
   });
 
-  // All products for the liquid position form
+  // All products for the liquid position form + waterfall config
   const products = await prisma.product.findMany({
-    select: { id: true, name: true },
+    select: { id: true, name: true, type: true },
     orderBy: { name: "asc" },
   });
 
@@ -517,6 +606,19 @@ async function SleeveSection({ clientId }: { clientId: string }) {
         sleeveId={sleeve.id}
         approvedFunds={approvedFunds}
         products={products}
+        bufferConfig={bufferConfig}
+        liquidityAssessment={liquidityAssessment}
+        activeAlerts={activeAlerts.map((a) => ({
+          id: a.id,
+          severity: a.severity,
+          message: a.message,
+          createdAt: a.createdAt.toISOString(),
+        }))}
+        sellRecommendation={sellRecommendation}
+        buyRecommendation={buyRecommendation}
+        sellWaterfall={sellWaterfall}
+        buyWaterfall={buyWaterfall}
+        minTradeAmount={sleeve.minTradeAmount}
       />
     </div>
   );

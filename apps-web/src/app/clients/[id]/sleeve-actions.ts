@@ -55,6 +55,111 @@ export async function createSleeveAction(
   return { success: true };
 }
 
+// ── Update Buffer Config ────────────────────────────────
+
+const updateBufferSchema = z.object({
+  clientId: z.string().min(1),
+  sleeveId: z.string().min(1),
+  bufferMethod: z.enum(["VS_UNFUNDED_PCT", "VS_PROJECTED_CALLS"]),
+  bufferPctOfUnfunded: z.string().min(1),
+  bufferMonthsForward: z.string().min(1),
+  alertEnabled: z.string().optional(),
+});
+
+export async function updateBufferConfigAction(
+  _prev: SleeveFormState,
+  formData: FormData,
+): Promise<SleeveFormState> {
+  await requireUser();
+
+  const parsed = updateBufferSchema.safeParse({
+    clientId: formData.get("clientId"),
+    sleeveId: formData.get("sleeveId"),
+    bufferMethod: formData.get("bufferMethod"),
+    bufferPctOfUnfunded: formData.get("bufferPctOfUnfunded"),
+    bufferMonthsForward: formData.get("bufferMonthsForward"),
+    alertEnabled: formData.get("alertEnabled"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const pctOfUnfunded = parseFloat(parsed.data.bufferPctOfUnfunded) / 100;
+  if (isNaN(pctOfUnfunded) || pctOfUnfunded < 0 || pctOfUnfunded > 1) {
+    return { error: "Buffer % must be between 0 and 100" };
+  }
+
+  const monthsForward = parseInt(parsed.data.bufferMonthsForward, 10);
+  if (isNaN(monthsForward) || monthsForward < 1 || monthsForward > 36) {
+    return { error: "Months forward must be between 1 and 36" };
+  }
+
+  await prisma.clientSleeve.update({
+    where: { id: parsed.data.sleeveId },
+    data: {
+      bufferMethod: parsed.data.bufferMethod,
+      bufferPctOfUnfunded: pctOfUnfunded,
+      bufferMonthsForward: monthsForward,
+      alertEnabled: parsed.data.alertEnabled === "on",
+    },
+  });
+
+  revalidatePath(`/clients/${parsed.data.clientId}`);
+  return { success: true };
+}
+
+// ── Update Waterfall Config ─────────────────────────────
+
+const updateWaterfallSchema = z.object({
+  clientId: z.string().min(1),
+  sleeveId: z.string().min(1),
+  sellWaterfallJson: z.string(),
+  buyWaterfallJson: z.string(),
+  minTradeAmount: z.string().min(1),
+});
+
+export async function updateWaterfallConfigAction(
+  _prev: SleeveFormState,
+  formData: FormData,
+): Promise<SleeveFormState> {
+  await requireUser();
+
+  const parsed = updateWaterfallSchema.safeParse({
+    clientId: formData.get("clientId"),
+    sleeveId: formData.get("sleeveId"),
+    sellWaterfallJson: formData.get("sellWaterfallJson"),
+    buyWaterfallJson: formData.get("buyWaterfallJson"),
+    minTradeAmount: formData.get("minTradeAmount"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  // Validate JSON arrays
+  try {
+    const sell = JSON.parse(parsed.data.sellWaterfallJson);
+    const buy = JSON.parse(parsed.data.buyWaterfallJson);
+    if (!Array.isArray(sell) || !Array.isArray(buy)) {
+      return { error: "Waterfall configs must be arrays" };
+    }
+  } catch {
+    return { error: "Invalid waterfall JSON" };
+  }
+
+  const minTrade = parseFloat(parsed.data.minTradeAmount);
+  if (isNaN(minTrade) || minTrade < 0) {
+    return { error: "Min trade amount must be >= 0" };
+  }
+
+  await prisma.clientSleeve.update({
+    where: { id: parsed.data.sleeveId },
+    data: {
+      sellWaterfallJson: parsed.data.sellWaterfallJson,
+      buyWaterfallJson: parsed.data.buyWaterfallJson,
+      minTradeAmount: minTrade,
+    },
+  });
+
+  revalidatePath(`/clients/${parsed.data.clientId}`);
+  return { success: true };
+}
+
 // ── Add Commitment ──────────────────────────────────────
 
 const addCommitmentSchema = z.object({

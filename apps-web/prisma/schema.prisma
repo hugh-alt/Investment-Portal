@@ -83,6 +83,7 @@ model Product {
   lookthroughUnderlying LookthroughHolding[] @relation("UnderlyingProduct")
   taxonomyMaps          ProductTaxonomyMap[]
   sleeveLiquidPositions SleeveLiquidPosition[]
+  recommendationLegs    SleeveRecommendationLeg[]
 }
 
 model Holding {
@@ -271,17 +272,81 @@ model PMFundApproval {
   fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
 }
 
-model ClientSleeve {
-  id             String   @id @default(cuid())
-  clientId       String   @unique
-  name           String
-  targetPct      Float?   // 0–1
-  cashBufferPct  Float    @default(0.05) // 0–1
-  createdAt      DateTime @default(now())
+enum BufferMethod {
+  VS_UNFUNDED_PCT
+  VS_PROJECTED_CALLS
+}
 
-  client          Client               @relation(fields: [clientId], references: [id])
+enum AlertSeverity {
+  INFO
+  WARN
+  CRITICAL
+}
+
+model ClientSleeve {
+  id                  String       @id @default(cuid())
+  clientId            String       @unique
+  name                String
+  targetPct           Float?       // 0–1
+  cashBufferPct       Float        @default(0.05) // 0–1
+  bufferMethod        BufferMethod @default(VS_UNFUNDED_PCT)
+  bufferPctOfUnfunded Float        @default(0.10) // 0–1
+  bufferMonthsForward Int          @default(6)
+  alertEnabled        Boolean      @default(true)
+  sellWaterfallJson   String       @default("[]") // JSON: ordered ProductType[] or taxonomy node names
+  buyWaterfallJson    String       @default("[]") // JSON: ordered ProductType[] or taxonomy node names
+  minTradeAmount      Float        @default(1000)
+  createdAt           DateTime     @default(now())
+
+  client          Client                  @relation(fields: [clientId], references: [id])
   commitments     ClientCommitment[]
   liquidPositions SleeveLiquidPosition[]
+  alerts          SleeveAlert[]
+  recommendations SleeveRecommendation[]
+}
+
+model SleeveAlert {
+  id             String        @id @default(cuid())
+  clientSleeveId String
+  severity       AlertSeverity
+  message        String
+  isResolved     Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+
+  sleeve ClientSleeve @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
+}
+
+enum RecommendationKind {
+  RAISE_LIQUIDITY
+  INVEST_EXCESS
+}
+
+enum RecommendationAction {
+  SELL
+  BUY
+}
+
+model SleeveRecommendation {
+  id             String             @id @default(cuid())
+  clientSleeveId String
+  kind           RecommendationKind
+  summary        String
+  createdAt      DateTime           @default(now())
+
+  sleeve ClientSleeve              @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
+  legs   SleeveRecommendationLeg[]
+}
+
+model SleeveRecommendationLeg {
+  id               String               @id @default(cuid())
+  recommendationId String
+  action           RecommendationAction
+  productId        String
+  amount           Float
+  reason           String
+
+  recommendation SleeveRecommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+  product        Product              @relation(fields: [productId], references: [id])
 }
 
 model ClientCommitment {
