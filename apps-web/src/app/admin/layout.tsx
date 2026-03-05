@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireUser } from "@/lib/auth";
+import { requireUser, isAdmin } from "@/lib/auth";
 import { logoutAction } from "@/app/dashboard/actions";
 
 const NAV_ITEMS = [
@@ -17,7 +17,7 @@ export default async function AdminLayout({
 }) {
   const user = await requireUser();
 
-  if (user.role !== "ADMIN") {
+  if (!isAdmin(user)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
         <div className="max-w-sm text-center">

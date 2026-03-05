@@ -1,0 +1,2 @@
+-- AlterEnum: add SUPER_ADMIN to Role
+ALTER TYPE "Role" ADD VALUE 'SUPER_ADMIN';

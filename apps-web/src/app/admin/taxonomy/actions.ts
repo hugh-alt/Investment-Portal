@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth";
+import { requireUser, isAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
   createTaxonomyWithDefaults,
@@ -28,7 +28,7 @@ export async function createTaxonomyAction(
   formData: FormData,
 ): Promise<CreateState> {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return { error: "Not authorised" };
+  if (!isAdmin(user)) return { error: "Not authorised" };
 
   const parsed = createSchema.safeParse({
     name: formData.get("name"),
@@ -48,7 +48,7 @@ export async function createTaxonomyAction(
 
 export async function deleteTaxonomyAction(taxonomyId: string) {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return;
+  if (!isAdmin(user)) return;
   await prisma.taxonomy.delete({ where: { id: taxonomyId } });
   revalidatePath("/admin/taxonomy");
   redirect("/admin/taxonomy");
@@ -70,7 +70,7 @@ export async function addNodeAction(
   formData: FormData,
 ): Promise<NodeActionState> {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return { error: "Not authorised" };
+  if (!isAdmin(user)) return { error: "Not authorised" };
 
   const parsed = addNodeSchema.safeParse({
     taxonomyId: formData.get("taxonomyId"),
@@ -103,7 +103,7 @@ export async function renameNodeAction(
   formData: FormData,
 ): Promise<NodeActionState> {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return { error: "Not authorised" };
+  if (!isAdmin(user)) return { error: "Not authorised" };
 
   const parsed = renameSchema.safeParse({
     nodeId: formData.get("nodeId"),
@@ -124,7 +124,7 @@ export async function deleteNodeAction(
   nodeId: string,
 ) {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return;
+  if (!isAdmin(user)) return;
   await deleteNode(nodeId);
   revalidatePath(`/admin/taxonomy/${taxonomyId}`);
 }
@@ -137,7 +137,7 @@ export async function reorderNodeAction(
   nodeIdB: string,
 ) {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return;
+  if (!isAdmin(user)) return;
   await swapSortOrder(nodeIdA, nodeIdB);
   revalidatePath(`/admin/taxonomy/${taxonomyId}`);
 }

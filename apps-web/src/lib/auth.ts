@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "./prisma";
 import type { User } from "../generated/prisma/client";
+import type { Role } from "../generated/prisma/enums";
 
 const COOKIE_NAME = "session";
 const secret = new TextEncoder().encode(
@@ -53,4 +54,40 @@ export async function setSessionCookie(token: string) {
 export async function clearSessionCookie() {
   const cookieStore = await cookies();
   cookieStore.delete(COOKIE_NAME);
+}
+
+// ── Role helpers (pure, testable) ───────────────────────
+
+/** Check if a user has one of the given roles. SUPER_ADMIN always passes. */
+export function hasRole(user: { role: string }, ...roles: Role[]): boolean {
+  if (user.role === "SUPER_ADMIN") return true;
+  return roles.includes(user.role as Role);
+}
+
+/** True if user is ADMIN or SUPER_ADMIN. */
+export function isAdmin(user: { role: string }): boolean {
+  return user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+}
+
+/** True if user is SUPER_ADMIN. */
+export function isSuperAdmin(user: { role: string }): boolean {
+  return user.role === "SUPER_ADMIN";
+}
+
+/** Require the user has one of the given roles, or redirect to dashboard. */
+export async function requireRole(...roles: Role[]): Promise<User> {
+  const user = await requireUser();
+  if (!hasRole(user, ...roles)) {
+    redirect("/dashboard");
+  }
+  return user;
+}
+
+/** Require the user is SUPER_ADMIN (for future platform pages). */
+export async function requireSuperAdmin(): Promise<User> {
+  const user = await requireUser();
+  if (!isSuperAdmin(user)) {
+    redirect("/dashboard");
+  }
+  return user;
 }

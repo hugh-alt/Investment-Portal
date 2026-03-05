@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth";
+import { requireUser, isAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { validateMonotonicCumPct, type CurvePoint } from "@/lib/pm-curves";
 
@@ -22,7 +22,7 @@ export async function createFundAction(
   formData: FormData,
 ): Promise<CreateFundState> {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return { error: "Admin access required" };
+  if (!isAdmin(user)) return { error: "Admin access required" };
 
   const parsed = createFundSchema.safeParse({
     name: formData.get("name"),
@@ -66,7 +66,7 @@ export async function toggleApprovalAction(
   formData: FormData,
 ): Promise<ToggleApprovalState> {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return { error: "Admin access required" };
+  if (!isAdmin(user)) return { error: "Admin access required" };
 
   const parsed = toggleSchema.safeParse({
     fundId: formData.get("fundId"),
@@ -101,7 +101,7 @@ export async function saveProfileAction(
   formData: FormData,
 ): Promise<SaveProfileState> {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return { error: "Admin access required" };
+  if (!isAdmin(user)) return { error: "Admin access required" };
 
   const parsed = profileSchema.safeParse({
     fundId: formData.get("fundId"),

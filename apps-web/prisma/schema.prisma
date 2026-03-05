@@ -10,6 +10,7 @@ datasource db {
 enum Role {
   ADMIN
   ADVISER
+  SUPER_ADMIN
 }
 
 model User {

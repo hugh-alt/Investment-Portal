@@ -18,6 +18,16 @@ export default function LoginPage() {
           Enter your email to continue (demo &mdash; no password required).
         </p>
 
+        <div className="mt-4 rounded-md border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/50">
+          <p className="mb-1.5 text-xs font-medium text-zinc-500">Demo accounts:</p>
+          <div className="flex flex-col gap-0.5 text-xs text-zinc-600 dark:text-zinc-400">
+            <span><strong className="font-medium text-zinc-700 dark:text-zinc-300">Super Admin</strong> &mdash; superadmin@reachalts.com.au</span>
+            <span><strong className="font-medium text-zinc-700 dark:text-zinc-300">Admin</strong> &mdash; admin@reachalts.com.au</span>
+            <span><strong className="font-medium text-zinc-700 dark:text-zinc-300">Adviser</strong> &mdash; adviser@reachalts.com.au</span>
+            <span><strong className="font-medium text-zinc-700 dark:text-zinc-300">Admin + Adviser</strong> &mdash; adminadviser@reachalts.com.au</span>
+          </div>
+        </div>
+
         <form action={formAction} className="mt-6 flex flex-col gap-4">
           <label className="flex flex-col gap-1.5">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth";
+import { requireUser, isAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { MappingScope } from "@/generated/prisma/enums";
 
@@ -19,7 +19,7 @@ export async function setMappingAction(
   formData: FormData,
 ): Promise<MapState> {
   const user = await requireUser();
-  if (user.role !== "ADMIN") return { error: "Not authorised" };
+  if (!isAdmin(user)) return { error: "Not authorised" };
 
   const parsed = mapSchema.safeParse({
     taxonomyId: formData.get("taxonomyId"),

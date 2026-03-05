@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser } from "@/lib/auth";
+import { requireUser, isAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ApprovalToggle } from "./approval-toggle";
 import { ProfileEditor } from "./profile-editor";
@@ -19,7 +19,7 @@ export default async function FundDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const user = await requireUser();
-  if (user.role !== "ADMIN") notFound();
+  if (!isAdmin(user)) notFound();
 
   const { id } = await params;
 
