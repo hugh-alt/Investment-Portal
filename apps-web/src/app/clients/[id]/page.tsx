@@ -619,6 +619,26 @@ async function SleeveSection({ clientId }: { clientId: string }) {
     take: 5,
   });
 
+  // Fetch orders for each recommendation
+  const recIds = persistedRecommendations.map((r) => r.id);
+  const allOrders = recIds.length > 0
+    ? await prisma.order.findMany({
+        where: { sourceId: { in: recIds } },
+        include: {
+          product: { select: { name: true } },
+          events: { orderBy: { createdAt: "desc" }, take: 1 },
+        },
+        orderBy: { createdAt: "asc" },
+      })
+    : [];
+
+  const ordersByRecId = new Map<string, typeof allOrders>();
+  for (const o of allOrders) {
+    const list = ordersByRecId.get(o.sourceId) ?? [];
+    list.push(o);
+    ordersByRecId.set(o.sourceId, list);
+  }
+
   const recommendationsForUI = persistedRecommendations.map((r) => ({
     id: r.id,
     kind: r.kind as string,
@@ -644,6 +664,15 @@ async function SleeveSection({ clientId }: { clientId: string }) {
       actorRole: e.actorRole,
       note: e.note,
       createdAt: e.createdAt.toISOString(),
+    })),
+    orders: (ordersByRecId.get(r.id) ?? []).map((o) => ({
+      id: o.id,
+      productName: o.product.name,
+      side: o.side as string,
+      amount: o.amount,
+      status: o.status as string,
+      updatedAt: o.updatedAt.toISOString(),
+      lastEvent: o.events[0]?.note ?? null,
     })),
   }));
 

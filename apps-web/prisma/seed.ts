@@ -165,7 +165,7 @@ async function main() {
   await seedSAA(prisma, adviser.id, clientIds);
 
   // ── Private Markets ──
-  await seedPM(prisma, clientIds);
+  await seedPM(prisma, clientIds, adviserUser.id);
 
   console.log("Seeded 4 demo users:");
   console.log("  SUPER_ADMIN : superadmin@reachalts.com.au");

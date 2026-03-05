@@ -11,9 +11,14 @@ import {
   updateBufferConfigAction,
   updateWaterfallConfigAction,
   approveRecommendationAction,
+  createOrdersAction,
+  simulateSubmitAction,
+  simulateFillsAction,
   type SleeveFormState,
 } from "./sleeve-actions";
 import { statusLabel, nextStepLabel } from "@/lib/approval";
+import { EXECUTION_STATUS_LABELS, type ExecutionStatus } from "@/lib/execution";
+import { formatDate, formatDateTime } from "@/lib/format";
 
 const fmt = (v: number) =>
   "$" + v.toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -118,6 +123,16 @@ type RecommendationLeg = {
   reason: string;
 };
 
+type OrderInfo = {
+  id: string;
+  productName: string;
+  side: string;
+  amount: number;
+  status: string;
+  updatedAt: string;
+  lastEvent: string | null;
+};
+
 type PersistedRecommendation = {
   id: string;
   kind: string;
@@ -130,6 +145,7 @@ type PersistedRecommendation = {
   rejectionReason: string | null;
   legs: RecommendationLeg[];
   events: RecommendationEvent[];
+  orders: OrderInfo[];
 };
 
 export function SleeveSummary({
@@ -647,6 +663,15 @@ function RecommendedActionsPanel({
   );
 }
 
+const ORDER_STATUS_COLORS: Record<string, string> = {
+  CREATED: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  SUBMITTED: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  PARTIALLY_FILLED: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  FILLED: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300",
+  REJECTED: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  CANCELLED: "bg-zinc-200 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400",
+};
+
 function RecommendationCard({
   rec,
   clientId,
@@ -660,6 +685,18 @@ function RecommendationCard({
     approveRecommendationAction,
     {},
   );
+  const [orderState, orderAction, orderPending] = useActionState<SleeveFormState, FormData>(
+    createOrdersAction,
+    {},
+  );
+  const [submitState, submitAction, submitPending] = useActionState<SleeveFormState, FormData>(
+    simulateSubmitAction,
+    {},
+  );
+  const [fillState, fillAction, fillPending] = useActionState<SleeveFormState, FormData>(
+    simulateFillsAction,
+    {},
+  );
 
   const kindBadge = rec.kind === "RAISE_LIQUIDITY"
     ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
@@ -667,6 +704,25 @@ function RecommendationCard({
 
   const statusColor = STATUS_COLORS[rec.status] ?? "bg-zinc-100 text-zinc-600";
   const step = nextStepLabel(rec.status as "DRAFT" | "ADVISER_APPROVED" | "CLIENT_APPROVED" | "REJECTED");
+
+  const hasOrders = rec.orders.length > 0;
+  const hasCreated = rec.orders.some((o) => o.status === "CREATED");
+  const hasSubmitted = rec.orders.some((o) => o.status === "SUBMITTED" || o.status === "PARTIALLY_FILLED");
+
+  function exportCSV() {
+    const header = "id,product,side,amount,status";
+    const rows = rec.orders.map((o) =>
+      `${o.id},"${o.productName}",${o.side},${o.amount},${o.status}`
+    );
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `orders-${rec.id.slice(0, 8)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
@@ -678,7 +734,7 @@ function RecommendationCard({
         <span className={`rounded px-2 py-0.5 text-xs font-semibold ${statusColor}`}>
           {statusLabel(rec.status as "DRAFT" | "ADVISER_APPROVED" | "CLIENT_APPROVED" | "REJECTED")}
         </span>
-        <span className="text-xs text-zinc-400">{new Date(rec.createdAt).toLocaleDateString()}</span>
+        <span className="text-xs text-zinc-400">{formatDate(rec.createdAt)}</span>
         {step && <span className="text-xs text-zinc-500 italic">{step}</span>}
       </div>
 
@@ -691,7 +747,7 @@ function RecommendationCard({
       )}
 
       {/* Legs table */}
-      {rec.legs.length > 0 && (
+      {rec.legs.length > 0 && !hasOrders && (
         <div className="mt-2 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700">
           <table className="w-full text-sm">
             <thead>
@@ -720,7 +776,57 @@ function RecommendationCard({
         </div>
       )}
 
-      {/* Action buttons */}
+      {/* Order Blotter */}
+      {hasOrders && (
+        <div className="mt-2">
+          <div className="flex items-center justify-between">
+            <h5 className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Order Blotter</h5>
+            <button
+              type="button"
+              onClick={exportCSV}
+              className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+            >
+              Export CSV
+            </button>
+          </div>
+          <div className="mt-1 overflow-hidden rounded border border-zinc-200 dark:border-zinc-700">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Side</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Product</th>
+                  <th className="px-3 py-1.5 text-right text-xs font-medium text-zinc-500">Amount</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Status</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-medium text-zinc-500">Last Update</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rec.orders.map((order) => (
+                  <tr key={order.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
+                    <td className="px-3 py-1.5">
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${order.side === "SELL" ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
+                        {order.side}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 text-zinc-900 dark:text-zinc-100">{order.productName}</td>
+                    <td className="px-3 py-1.5 text-right text-zinc-600 dark:text-zinc-400">{fmt(order.amount)}</td>
+                    <td className="px-3 py-1.5">
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${ORDER_STATUS_COLORS[order.status] ?? ""}`}>
+                        {EXECUTION_STATUS_LABELS[order.status as ExecutionStatus] ?? order.status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 text-xs text-zinc-500">
+                      {order.lastEvent ?? formatDateTime(order.updatedAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Approval action buttons */}
       {(rec.status === "DRAFT" || rec.status === "ADVISER_APPROVED") && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <form action={approveAction}>
@@ -770,6 +876,57 @@ function RecommendationCard({
         </div>
       )}
 
+      {/* Execution action buttons */}
+      {rec.status === "CLIENT_APPROVED" && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {!hasOrders && (
+            <form action={orderAction}>
+              <input type="hidden" name="clientId" value={clientId} />
+              <input type="hidden" name="recommendationId" value={rec.id} />
+              <button
+                type="submit"
+                disabled={orderPending}
+                className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+              >
+                {orderPending ? "Creating..." : "Create Orders"}
+              </button>
+            </form>
+          )}
+
+          {hasCreated && (
+            <form action={submitAction}>
+              <input type="hidden" name="clientId" value={clientId} />
+              <input type="hidden" name="recommendationId" value={rec.id} />
+              <button
+                type="submit"
+                disabled={submitPending}
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50"
+              >
+                {submitPending ? "Submitting..." : "Simulate Submit"}
+              </button>
+            </form>
+          )}
+
+          {hasSubmitted && (
+            <form action={fillAction}>
+              <input type="hidden" name="clientId" value={clientId} />
+              <input type="hidden" name="recommendationId" value={rec.id} />
+              <button
+                type="submit"
+                disabled={fillPending}
+                className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {fillPending ? "Filling..." : "Simulate Fills"}
+              </button>
+            </form>
+          )}
+
+          {orderState.error && <span className="text-xs text-red-600">{orderState.error}</span>}
+          {submitState.error && <span className="text-xs text-red-600">{submitState.error}</span>}
+          {fillState.error && <span className="text-xs text-red-600">{fillState.error}</span>}
+        </div>
+      )}
+
       {/* Timeline toggle */}
       {rec.events.length > 0 && (
         <div className="mt-2">
@@ -788,7 +945,7 @@ function RecommendationCard({
                     {e.action}
                   </span>
                   <span>{e.actorRole}</span>
-                  <span className="text-zinc-400">{new Date(e.createdAt).toLocaleString()}</span>
+                  <span className="text-zinc-400">{formatDateTime(e.createdAt)}</span>
                   {e.note && <span className="italic text-zinc-400">— {e.note}</span>}
                 </div>
               ))}

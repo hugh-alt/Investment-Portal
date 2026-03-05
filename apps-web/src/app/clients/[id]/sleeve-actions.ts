@@ -5,14 +5,15 @@ import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { validateTransition, type ApprovalAction, type ActorRole } from "@/lib/approval";
+import { canCreateOrders, canSubmitOrders, canFillOrders, type ExecutionStatus } from "@/lib/execution";
 
 // ── Create Sleeve ───────────────────────────────────────
 
 const createSleeveSchema = z.object({
   clientId: z.string().min(1),
   name: z.string().min(1, "Name is required").max(100),
-  targetPct: z.string().optional(),
-  cashBufferPct: z.string().optional(),
+  targetPct: z.string().nullable().optional(),
+  cashBufferPct: z.string().nullable().optional(),
 });
 
 export type SleeveFormState = { error?: string; success?: boolean };
@@ -64,7 +65,7 @@ const updateBufferSchema = z.object({
   bufferMethod: z.enum(["VS_UNFUNDED_PCT", "VS_PROJECTED_CALLS"]),
   bufferPctOfUnfunded: z.string().min(1),
   bufferMonthsForward: z.string().min(1),
-  alertEnabled: z.string().optional(),
+  alertEnabled: z.string().nullable().optional(),
 });
 
 export async function updateBufferConfigAction(
@@ -168,9 +169,9 @@ const addCommitmentSchema = z.object({
   sleeveId: z.string().min(1),
   fundId: z.string().min(1, "Select a fund"),
   commitmentAmount: z.string().min(1, "Commitment amount required"),
-  fundedAmount: z.string().optional(),
-  navAmount: z.string().optional(),
-  distributionsAmount: z.string().optional(),
+  fundedAmount: z.string().nullable().optional(),
+  navAmount: z.string().nullable().optional(),
+  distributionsAmount: z.string().nullable().optional(),
 });
 
 export async function addCommitmentAction(
@@ -258,7 +259,7 @@ const approvalSchema = z.object({
   clientId: z.string().min(1),
   recommendationId: z.string().min(1),
   action: z.enum(["APPROVE", "REJECT"]),
-  note: z.string().optional(),
+  note: z.string().nullable().optional(),
 });
 
 export async function approveRecommendationAction(
@@ -317,6 +318,186 @@ export async function approveRecommendationAction(
       },
     }),
   ]);
+
+  revalidatePath(`/clients/${parsed.data.clientId}`);
+  return { success: true };
+}
+
+// ── Create Orders from Recommendation ──────────────────
+
+const createOrdersSchema = z.object({
+  clientId: z.string().min(1),
+  recommendationId: z.string().min(1),
+});
+
+export async function createOrdersAction(
+  _prev: SleeveFormState,
+  formData: FormData,
+): Promise<SleeveFormState> {
+  await requireUser();
+
+  const parsed = createOrdersSchema.safeParse({
+    clientId: formData.get("clientId"),
+    recommendationId: formData.get("recommendationId"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const rec = await prisma.sleeveRecommendation.findUnique({
+    where: { id: parsed.data.recommendationId },
+    include: { legs: true },
+  });
+  if (!rec) return { error: "Recommendation not found" };
+
+  const existingOrders = await prisma.order.count({
+    where: { sourceId: rec.id },
+  });
+
+  const check = canCreateOrders(rec.status, existingOrders);
+  if (!check.ok) return { error: check.error };
+
+  await prisma.order.createMany({
+    data: rec.legs.map((leg) => ({
+      clientId: parsed.data.clientId,
+      source: "SLEEVE_RECOMMENDATION" as const,
+      sourceId: rec.id,
+      productId: leg.productId,
+      side: leg.action as "BUY" | "SELL",
+      amount: leg.amount,
+      status: "CREATED" as const,
+    })),
+  });
+
+  // Create initial OrderEvents
+  const orders = await prisma.order.findMany({
+    where: { sourceId: rec.id },
+    select: { id: true },
+  });
+  await prisma.orderEvent.createMany({
+    data: orders.map((o) => ({
+      orderId: o.id,
+      status: "CREATED" as const,
+      note: "Order created from recommendation",
+    })),
+  });
+
+  revalidatePath(`/clients/${parsed.data.clientId}`);
+  return { success: true };
+}
+
+// ── Simulate Submit Orders ─────────────────────────────
+
+const simulateSchema = z.object({
+  clientId: z.string().min(1),
+  recommendationId: z.string().min(1),
+});
+
+export async function simulateSubmitAction(
+  _prev: SleeveFormState,
+  formData: FormData,
+): Promise<SleeveFormState> {
+  await requireUser();
+
+  const parsed = simulateSchema.safeParse({
+    clientId: formData.get("clientId"),
+    recommendationId: formData.get("recommendationId"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const orders = await prisma.order.findMany({
+    where: { sourceId: parsed.data.recommendationId },
+  });
+
+  const statuses = orders.map((o) => o.status as ExecutionStatus);
+  const check = canSubmitOrders(statuses);
+  if (!check.ok) return { error: check.error };
+
+  const createdOrders = orders.filter((o) => o.status === "CREATED");
+
+  await prisma.$transaction(
+    createdOrders.flatMap((o) => [
+      prisma.order.update({
+        where: { id: o.id },
+        data: { status: "SUBMITTED" },
+      }),
+      prisma.orderEvent.create({
+        data: {
+          orderId: o.id,
+          status: "SUBMITTED",
+          note: "Simulated submission to platform",
+        },
+      }),
+    ]),
+  );
+
+  revalidatePath(`/clients/${parsed.data.clientId}`);
+  return { success: true };
+}
+
+// ── Simulate Fill Orders ───────────────────────────────
+
+export async function simulateFillsAction(
+  _prev: SleeveFormState,
+  formData: FormData,
+): Promise<SleeveFormState> {
+  await requireUser();
+
+  const parsed = simulateSchema.safeParse({
+    clientId: formData.get("clientId"),
+    recommendationId: formData.get("recommendationId"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const orders = await prisma.order.findMany({
+    where: { sourceId: parsed.data.recommendationId },
+  });
+
+  const fillable = orders.filter(
+    (o) => o.status === "SUBMITTED" || o.status === "PARTIALLY_FILLED",
+  );
+
+  const statuses = orders.map((o) => o.status as ExecutionStatus);
+  const check = canFillOrders(statuses);
+  if (!check.ok) return { error: check.error };
+
+  // Randomly pick one order to be PARTIALLY_FILLED, rest FILLED
+  const partialIdx = fillable.length > 1 ? Math.floor(Math.random() * fillable.length) : -1;
+  // Also randomly reject one order (1 in 4 chance) for demo
+  const rejectIdx = fillable.length > 2 && Math.random() < 0.25
+    ? (partialIdx + 1) % fillable.length
+    : -1;
+
+  type ExecStatus = "FILLED" | "PARTIALLY_FILLED" | "REJECTED";
+  const ops = fillable.flatMap((o, i) => {
+    let newStatus: ExecStatus;
+    let note: string;
+
+    if (i === rejectIdx) {
+      newStatus = "REJECTED";
+      note = "Simulated rejection: insufficient market liquidity";
+    } else if (i === partialIdx && o.status === "SUBMITTED") {
+      newStatus = "PARTIALLY_FILLED";
+      note = `Simulated partial fill: ${Math.floor(50 + Math.random() * 40)}% filled`;
+    } else {
+      newStatus = "FILLED";
+      note = "Simulated full fill";
+    }
+
+    return [
+      prisma.order.update({
+        where: { id: o.id },
+        data: { status: newStatus },
+      }),
+      prisma.orderEvent.create({
+        data: {
+          orderId: o.id,
+          status: newStatus,
+          note,
+        },
+      }),
+    ];
+  });
+
+  await prisma.$transaction(ops);
 
   revalidatePath(`/clients/${parsed.data.clientId}`);
   return { success: true };

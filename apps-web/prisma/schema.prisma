@@ -45,6 +45,7 @@ model Client {
   accounts     Account[]
   clientSAA    ClientSAA?
   clientSleeve ClientSleeve?
+  orders       Order[]
 }
 
 // ── Platform / Holdings ─────────────────────────────────
@@ -84,6 +85,7 @@ model Product {
   taxonomyMaps          ProductTaxonomyMap[]
   sleeveLiquidPositions SleeveLiquidPosition[]
   recommendationLegs    SleeveRecommendationLeg[]
+  orders                Order[]
 }
 
 model Holding {
@@ -377,6 +379,53 @@ model SleeveRecommendationLeg {
 
   recommendation SleeveRecommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
   product        Product              @relation(fields: [productId], references: [id])
+}
+
+// ── Simulated Execution ──────────────────────────────────
+
+enum ExecutionStatus {
+  CREATED
+  SUBMITTED
+  PARTIALLY_FILLED
+  FILLED
+  REJECTED
+  CANCELLED
+}
+
+enum OrderSource {
+  SLEEVE_RECOMMENDATION
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+model Order {
+  id        String          @id @default(cuid())
+  clientId  String
+  source    OrderSource
+  sourceId  String          // recommendation ID
+  productId String
+  side      OrderSide
+  amount    Float
+  status    ExecutionStatus @default(CREATED)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  client  Client       @relation(fields: [clientId], references: [id])
+  product Product      @relation(fields: [productId], references: [id])
+  events  OrderEvent[]
+}
+
+model OrderEvent {
+  id        String          @id @default(cuid())
+  orderId   String
+  status    ExecutionStatus
+  note      String?
+  createdAt DateTime        @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
 model ClientCommitment {

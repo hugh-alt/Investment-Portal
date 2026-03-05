@@ -1,5 +1,5 @@
 import { PrismaClient } from "../src/generated/prisma/client";
-import { PMFundStatus, LifecycleStage, BufferMethod, ApprovalStatus, RecommendationKind, RecommendationAction } from "../src/generated/prisma/enums";
+import { PMFundStatus, LifecycleStage, BufferMethod, ApprovalStatus, RecommendationKind, RecommendationAction, ApprovalAction } from "../src/generated/prisma/enums";
 
 const PM_FUNDS = [
   { id: "pmf-infra", name: "Macquarie Infrastructure Fund V", vintageYear: 2023, strategy: "Infrastructure", currency: "AUD", status: PMFundStatus.OPEN, lifecycleStage: LifecycleStage.INVESTING, firstCloseDate: new Date("2023-03-15"), investmentPeriodMonths: 48, fundTermMonths: 120 },
@@ -69,8 +69,10 @@ function distCurve(stage: LifecycleStage): { month: string; cumPct: number }[] {
   });
 }
 
-export async function seedPM(prisma: PrismaClient, clientIds: string[]) {
+export async function seedPM(prisma: PrismaClient, clientIds: string[], adviserUserId?: string) {
   // Clean existing PM data for idempotency
+  await prisma.orderEvent.deleteMany({});
+  await prisma.order.deleteMany({});
   await prisma.approvalEvent.deleteMany({});
   await prisma.sleeveRecommendationLeg.deleteMany({});
   await prisma.sleeveRecommendation.deleteMany({});
@@ -265,13 +267,16 @@ export async function seedPM(prisma: PrismaClient, clientIds: string[]) {
     data: { clientSleeveId: sleeve2.id, productId: "prod-wbc", marketValue: 5000 },
   });
 
-  // ── Seed a DRAFT sell recommendation for Bob (shortfall scenario) ──
-  await prisma.sleeveRecommendation.create({
+  // ── Seed a CLIENT_APPROVED sell recommendation for Bob (shortfall scenario) ──
+  const now = new Date();
+  const rec = await prisma.sleeveRecommendation.create({
     data: {
       clientSleeveId: sleeve2.id,
       kind: RecommendationKind.RAISE_LIQUIDITY,
-      summary: "Raise $15,500 to cover liquidity shortfall",
-      status: ApprovalStatus.DRAFT,
+      summary: "Raise $15,000 to cover liquidity shortfall",
+      status: ApprovalStatus.CLIENT_APPROVED,
+      adviserApprovedAt: new Date(now.getTime() - 86400000), // 1 day ago
+      clientApprovedAt: now,
       legs: {
         create: [
           { action: RecommendationAction.SELL, productId: "prod-vas", amount: 8000, reason: "Waterfall #1, up to 100% of ETF" },
@@ -282,5 +287,29 @@ export async function seedPM(prisma: PrismaClient, clientIds: string[]) {
     },
   });
 
-  console.log("Created 8 PM funds with lifecycle stages + % curves, 2 client sleeves with waterfall configs, 1 DRAFT recommendation");
+  // Seed approval events for demo timeline
+  if (adviserUserId) {
+    await prisma.approvalEvent.createMany({
+      data: [
+        {
+          recommendationId: rec.id,
+          action: ApprovalAction.APPROVE,
+          actorUserId: adviserUserId,
+          actorRole: "ADVISER",
+          note: "Reviewed and approved",
+          createdAt: new Date(now.getTime() - 86400000),
+        },
+        {
+          recommendationId: rec.id,
+          action: ApprovalAction.APPROVE,
+          actorUserId: adviserUserId,
+          actorRole: "ADVISER",
+          note: "Client confirmed via phone",
+          createdAt: now,
+        },
+      ],
+    });
+  }
+
+  console.log("Created 8 PM funds with lifecycle stages + % curves, 2 client sleeves with waterfall configs, 1 CLIENT_APPROVED recommendation");
 }

@@ -106,7 +106,7 @@ function HoldingRowView({
           </span>
         </td>
         <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
-          {holding.units?.toLocaleString() ?? "—"}
+          {holding.units?.toLocaleString("en-AU") ?? "—"}
         </td>
         <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
           {holding.price ? fmt(holding.price) : "—"}
