@@ -5,6 +5,7 @@ import { Role, TaxonomyNodeType } from "../src/generated/prisma/enums";
 import { seedHoldings } from "./seed-holdings";
 import { seedMappings } from "./seed-mappings";
 import { seedSAA } from "./seed-saa";
+import { seedPM } from "./seed-pm";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -89,7 +90,10 @@ async function main() {
   // ── SAA ──
   await seedSAA(prisma, adviser.id, clientIds);
 
-  console.log("Seeded: admin, adviser, 5 clients, taxonomy, holdings, mappings, SAAs");
+  // ── Private Markets ──
+  await seedPM(prisma, clientIds);
+
+  console.log("Seeded: admin, adviser, 5 clients, taxonomy, holdings, mappings, SAAs, PM funds + sleeves");
 }
 
 main()

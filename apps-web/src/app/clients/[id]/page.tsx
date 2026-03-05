@@ -5,10 +5,13 @@ import { prisma } from "@/lib/prisma";
 import { MappingScope, SAAScope, TaxonomyNodeType } from "@/generated/prisma/enums";
 import { computeAllocation, type HoldingInput, type MappingInput } from "@/lib/allocation";
 import { computeDrift, type CurrentWeightInput, type TargetInput } from "@/lib/drift";
+import { computeSleeveTotals, type CommitmentInput } from "@/lib/sleeve";
+import { curveCumToIncremental, scaleIncrementalPctToDollars, computeFundMetrics, type CurvePoint } from "@/lib/pm-curves";
 import { HoldingsTable } from "./holdings-table";
 import { AllocationView } from "./allocation-view";
 import { SAASelector } from "./saa-selector";
 import { DriftView } from "./drift-view";
+import { CreateSleeveForm, SleeveSummary } from "./sleeve-view";
 
 export default async function ClientDetailPage({
   params,
@@ -112,6 +115,7 @@ export default async function ClientDetailPage({
 
             <AllocationSection accounts={client.accounts} clientId={id} />
             <SAASection clientId={id} accounts={client.accounts} />
+            <SleeveSection clientId={id} />
           </>
         )}
       </div>
@@ -385,6 +389,135 @@ async function SAASection({
           Unable to compute drift. Check taxonomy mappings.
         </p>
       )}
+    </div>
+  );
+}
+
+type CommitmentDetail = {
+  fundId: string;
+  fundName: string;
+  currency: string;
+  commitmentAmount: number;
+  fundedAmount: number;
+  navAmount: number;
+  distributionsAmount: number;
+  latestNavDate: string | null;
+  metrics: { unfunded: number; pctCalled: number; dpi: number | null; rvpi: number | null; tvpi: number | null };
+  projectedCalls: { month: string; amount: number }[];
+  projectedDistributions: { month: string; amount: number }[];
+};
+
+async function SleeveSection({ clientId }: { clientId: string }) {
+  const sleeve = await prisma.clientSleeve.findUnique({
+    where: { clientId },
+    include: {
+      commitments: {
+        include: {
+          fund: {
+            select: { name: true, currency: true, profile: true },
+          },
+        },
+      },
+      liquidPositions: {
+        include: { product: { select: { name: true } } },
+      },
+    },
+  });
+
+  if (!sleeve) {
+    return (
+      <div className="mt-8">
+        <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+          Private Markets Sleeve
+        </h2>
+        <CreateSleeveForm clientId={clientId} />
+      </div>
+    );
+  }
+
+  const commitmentInputs: CommitmentInput[] = sleeve.commitments.map((c) => ({
+    fundId: c.fundId,
+    fundName: c.fund.name,
+    currency: c.fund.currency,
+    commitmentAmount: c.commitmentAmount,
+    fundedAmount: c.fundedAmount,
+    navAmount: c.navAmount,
+    distributionsAmount: c.distributionsAmount,
+  }));
+
+  // Build detailed commitment data with metrics and projections
+  const commitmentDetails: CommitmentDetail[] = sleeve.commitments.map((c) => {
+    const metrics = computeFundMetrics(c.fundedAmount, c.navAmount, c.distributionsAmount, c.commitmentAmount);
+
+    let projectedCalls: { month: string; amount: number }[] = [];
+    let projectedDistributions: { month: string; amount: number }[] = [];
+
+    if (c.fund.profile) {
+      try {
+        const callCurve: CurvePoint[] = JSON.parse(c.fund.profile.projectedCallPctCurveJson);
+        const incCalls = curveCumToIncremental(callCurve);
+        projectedCalls = scaleIncrementalPctToDollars(incCalls, c.commitmentAmount);
+      } catch { /* empty */ }
+      try {
+        const distCurve: CurvePoint[] = JSON.parse(c.fund.profile.projectedDistPctCurveJson);
+        const incDist = curveCumToIncremental(distCurve);
+        projectedDistributions = scaleIncrementalPctToDollars(incDist, c.commitmentAmount);
+      } catch { /* empty */ }
+    }
+
+    return {
+      fundId: c.fundId,
+      fundName: c.fund.name,
+      currency: c.fund.currency,
+      commitmentAmount: c.commitmentAmount,
+      fundedAmount: c.fundedAmount,
+      navAmount: c.navAmount,
+      distributionsAmount: c.distributionsAmount,
+      latestNavDate: c.latestNavDate?.toISOString().slice(0, 10) ?? null,
+      metrics,
+      projectedCalls,
+      projectedDistributions,
+    };
+  });
+
+  const liquidInputs = sleeve.liquidPositions.map((p) => ({
+    productId: p.productId,
+    productName: p.product.name,
+    marketValue: p.marketValue,
+  }));
+
+  const totals = computeSleeveTotals(commitmentInputs, liquidInputs);
+
+  // Approved funds for the commitment form
+  const approvedFunds = await prisma.pMFund.findMany({
+    where: { approval: { isApproved: true } },
+    select: { id: true, name: true, currency: true },
+    orderBy: { name: "asc" },
+  });
+
+  // All products for the liquid position form
+  const products = await prisma.product.findMany({
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+        Private Markets Sleeve — {sleeve.name}
+      </h2>
+      <SleeveSummary
+        sleeveName={sleeve.name}
+        targetPct={sleeve.targetPct}
+        cashBufferPct={sleeve.cashBufferPct}
+        totals={totals}
+        commitmentDetails={commitmentDetails}
+        liquidPositions={liquidInputs}
+        clientId={clientId}
+        sleeveId={sleeve.id}
+        approvedFunds={approvedFunds}
+        products={products}
+      />
     </div>
   );
 }

@@ -40,9 +40,10 @@ model Client {
   name      String
   createdAt DateTime @default(now())
 
-  adviser   Adviser    @relation(fields: [adviserId], references: [id])
-  accounts  Account[]
-  clientSAA ClientSAA?
+  adviser      Adviser       @relation(fields: [adviserId], references: [id])
+  accounts     Account[]
+  clientSAA    ClientSAA?
+  clientSleeve ClientSleeve?
 }
 
 // ── Platform / Holdings ─────────────────────────────────
@@ -80,6 +81,7 @@ model Product {
   holdings              Holding[]
   lookthroughUnderlying LookthroughHolding[] @relation("UnderlyingProduct")
   taxonomyMaps          ProductTaxonomyMap[]
+  sleeveLiquidPositions SleeveLiquidPosition[]
 }
 
 model Holding {
@@ -215,4 +217,94 @@ model TaxonomyNode {
   children       TaxonomyNode[]       @relation("NodeTree")
   productMaps    ProductTaxonomyMap[]
   saaAllocations SAAAllocation[]
+}
+
+// ── Private Markets ──────────────────────────────────────
+
+enum PMFundStatus {
+  OPEN
+  CLOSED
+}
+
+enum LifecycleStage {
+  FUNDRAISING
+  INVESTING
+  HARVESTING
+  LIQUIDATING
+}
+
+model PMFund {
+  id                     String         @id @default(cuid())
+  name                   String
+  vintageYear            Int?
+  strategy               String?
+  currency               String         @default("AUD")
+  status                 PMFundStatus   @default(OPEN)
+  lifecycleStage         LifecycleStage?
+  firstCloseDate         DateTime?
+  investmentPeriodMonths Int?
+  fundTermMonths         Int?
+  createdAt              DateTime       @default(now())
+
+  approval    PMFundApproval?
+  profile     PMFundProfile?
+  commitments ClientCommitment[]
+}
+
+model PMFundProfile {
+  id                     String @id @default(cuid())
+  fundId                 String @unique
+  projectedCallPctCurveJson  String // JSON array [{month, cumPct}]
+  projectedDistPctCurveJson  String // JSON array [{month, cumPct}]
+
+  fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+}
+
+model PMFundApproval {
+  id         String   @id @default(cuid())
+  fundId     String   @unique
+  isApproved Boolean  @default(false)
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+}
+
+model ClientSleeve {
+  id             String   @id @default(cuid())
+  clientId       String   @unique
+  name           String
+  targetPct      Float?   // 0–1
+  cashBufferPct  Float    @default(0.05) // 0–1
+  createdAt      DateTime @default(now())
+
+  client          Client               @relation(fields: [clientId], references: [id])
+  commitments     ClientCommitment[]
+  liquidPositions SleeveLiquidPosition[]
+}
+
+model ClientCommitment {
+  id                  String    @id @default(cuid())
+  clientSleeveId      String
+  fundId              String
+  commitmentAmount    Float
+  fundedAmount        Float     @default(0)
+  navAmount           Float     @default(0)
+  distributionsAmount Float     @default(0)
+  latestNavDate       DateTime?
+  createdAt           DateTime  @default(now())
+
+  sleeve ClientSleeve @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
+  fund   PMFund       @relation(fields: [fundId], references: [id])
+}
+
+model SleeveLiquidPosition {
+  id             String   @id @default(cuid())
+  clientSleeveId String
+  productId      String
+  marketValue    Float
+  createdAt      DateTime @default(now())
+
+  sleeve  ClientSleeve @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
+  product Product      @relation(fields: [productId], references: [id])
 }

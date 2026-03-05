@@ -1,20 +1,49 @@
-export default function PmFundsPage() {
+import { requireUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { FundList } from "./fund-list";
+import { CreateFundForm } from "./create-fund-form";
+
+export default async function PmFundsPage() {
+  await requireUser();
+
+  const funds = await prisma.pMFund.findMany({
+    include: {
+      approval: true,
+      profile: true,
+      _count: { select: { commitments: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const fundData = funds.map((f) => ({
+    id: f.id,
+    name: f.name,
+    vintageYear: f.vintageYear,
+    strategy: f.strategy,
+    currency: f.currency,
+    status: f.status,
+    lifecycleStage: f.lifecycleStage,
+    firstCloseDate: f.firstCloseDate?.toISOString().slice(0, 10) ?? null,
+    fundTermMonths: f.fundTermMonths,
+    isApproved: f.approval?.isApproved ?? false,
+    hasProfile: !!f.profile,
+    commitmentCount: f._count.commitments,
+  }));
+
   return (
     <div>
-      <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
-        Approved PM Funds
-      </h1>
-      <p className="mt-2 text-sm text-zinc-500">
-        Maintain the list of private-markets funds available for adviser
-        allocation.
+      <div className="flex items-baseline justify-between">
+        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+          PM Funds
+        </h1>
+      </div>
+      <p className="mt-1 text-sm text-zinc-500">
+        Manage the private markets fund whitelist.
       </p>
-      <button
-        disabled
-        className="mt-6 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-      >
-        Add fund
-      </button>
-      <p className="mt-3 text-xs text-zinc-400">Coming next</p>
+
+      <CreateFundForm />
+
+      <FundList funds={fundData} />
     </div>
   );
 }
