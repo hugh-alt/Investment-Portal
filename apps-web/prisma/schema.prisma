@@ -31,6 +31,7 @@ model Adviser {
 
   user    User     @relation(fields: [userId], references: [id])
   clients Client[]
+  saas    SAA[]
 }
 
 model Client {
@@ -39,8 +40,9 @@ model Client {
   name      String
   createdAt DateTime @default(now())
 
-  adviser  Adviser   @relation(fields: [adviserId], references: [id])
-  accounts Account[]
+  adviser   Adviser    @relation(fields: [adviserId], references: [id])
+  accounts  Account[]
+  clientSAA ClientSAA?
 }
 
 // ── Platform / Holdings ─────────────────────────────────
@@ -105,6 +107,54 @@ model LookthroughHolding {
   underlyingProduct  Product @relation("UnderlyingProduct", fields: [underlyingProductId], references: [id])
 }
 
+// ── SAA ─────────────────────────────────────────────────
+
+enum SAAScope {
+  FIRM
+  ADVISER
+}
+
+model SAA {
+  id         String   @id @default(cuid())
+  name       String
+  taxonomyId String
+  ownerScope SAAScope @default(ADVISER)
+  adviserId  String?
+  createdAt  DateTime @default(now())
+
+  taxonomy    Taxonomy      @relation(fields: [taxonomyId], references: [id])
+  adviser     Adviser?      @relation(fields: [adviserId], references: [id])
+  allocations SAAAllocation[]
+  clientSAAs  ClientSAA[]
+}
+
+model SAAAllocation {
+  id           String @id @default(cuid())
+  saaId        String
+  nodeId       String
+  targetWeight Float  // 0–1
+  minWeight    Float  // 0–1
+  maxWeight    Float  // 0–1
+
+  saa  SAA          @relation(fields: [saaId], references: [id], onDelete: Cascade)
+  node TaxonomyNode @relation(fields: [nodeId], references: [id])
+
+  @@unique([saaId, nodeId])
+}
+
+model ClientSAA {
+  id            String   @id @default(cuid())
+  clientId      String
+  saaId         String
+  effectiveFrom DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id])
+  saa    SAA    @relation(fields: [saaId], references: [id])
+
+  @@unique([clientId])
+}
+
 // ── Taxonomy Mapping ─────────────────────────────────────
 
 enum MappingScope {
@@ -149,6 +199,7 @@ model Taxonomy {
   createdBy    User                 @relation(fields: [createdByUserId], references: [id])
   nodes        TaxonomyNode[]
   productMaps  ProductTaxonomyMap[]
+  saas         SAA[]
 }
 
 model TaxonomyNode {
@@ -159,8 +210,9 @@ model TaxonomyNode {
   nodeType   TaxonomyNodeType
   sortOrder  Int              @default(0)
 
-  taxonomy    Taxonomy             @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
-  parent      TaxonomyNode?        @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children    TaxonomyNode[]       @relation("NodeTree")
-  productMaps ProductTaxonomyMap[]
+  taxonomy       Taxonomy             @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
+  parent         TaxonomyNode?        @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children       TaxonomyNode[]       @relation("NodeTree")
+  productMaps    ProductTaxonomyMap[]
+  saaAllocations SAAAllocation[]
 }

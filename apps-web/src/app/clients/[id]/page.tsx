@@ -2,10 +2,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { MappingScope, TaxonomyNodeType } from "@/generated/prisma/enums";
+import { MappingScope, SAAScope, TaxonomyNodeType } from "@/generated/prisma/enums";
 import { computeAllocation, type HoldingInput, type MappingInput } from "@/lib/allocation";
+import { computeDrift, type CurrentWeightInput, type TargetInput } from "@/lib/drift";
 import { HoldingsTable } from "./holdings-table";
 import { AllocationView } from "./allocation-view";
+import { SAASelector } from "./saa-selector";
+import { DriftView } from "./drift-view";
 
 export default async function ClientDetailPage({
   params,
@@ -108,6 +111,7 @@ export default async function ClientDetailPage({
             ))}
 
             <AllocationSection accounts={client.accounts} clientId={id} />
+            <SAASection clientId={id} accounts={client.accounts} />
           </>
         )}
       </div>
@@ -216,4 +220,171 @@ async function AllocationSection({
   const allocation = computeAllocation(holdingInputs, mappings);
 
   return <AllocationView allocation={allocation} />;
+}
+
+async function SAASection({
+  clientId,
+  accounts,
+}: {
+  clientId: string;
+  accounts: {
+    holdings: {
+      productId: string;
+      marketValue: number;
+      product: { name: string; type: string };
+      lookthroughHoldings: {
+        underlyingProductId: string;
+        underlyingMarketValue: number;
+        weight: number;
+        underlyingProduct: { name: string };
+      }[];
+    }[];
+  }[];
+}) {
+  // Get available SAAs
+  const saas = await prisma.sAA.findMany({
+    select: { id: true, name: true, ownerScope: true },
+    orderBy: { name: "asc" },
+  });
+
+  // Get current assignment
+  const clientSAA = await prisma.clientSAA.findUnique({
+    where: { clientId },
+    include: {
+      saa: {
+        include: {
+          allocations: { include: { node: true } },
+          taxonomy: { include: { nodes: true } },
+        },
+      },
+    },
+  });
+
+  const currentSaaId = clientSAA?.saaId ?? null;
+
+  // Compute drift if SAA is assigned
+  let driftResult = null;
+  if (clientSAA?.saa) {
+    const { saa } = clientSAA;
+    const taxonomy = saa.taxonomy;
+
+    // Build risk bucket lookup
+    const riskBucketById = new Map<string, { id: string; name: string }>();
+    const riskBuckets = taxonomy.nodes.filter((n) => n.nodeType === TaxonomyNodeType.RISK);
+    for (const rb of riskBuckets) {
+      riskBucketById.set(rb.id, { id: rb.id, name: rb.name });
+    }
+    for (const n of taxonomy.nodes) {
+      if (n.parentId && riskBucketById.has(n.parentId)) {
+        riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
+      }
+    }
+    for (const n of taxonomy.nodes) {
+      if (n.parentId && riskBucketById.has(n.parentId) && !riskBucketById.has(n.id)) {
+        riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
+      }
+    }
+
+    const nodeById = new Map(taxonomy.nodes.map((n) => [n.id, n]));
+
+    // Get mappings for current allocation computation
+    const productMaps = await prisma.productTaxonomyMap.findMany({
+      where: {
+        taxonomyId: taxonomy.id,
+        OR: [
+          { scope: MappingScope.FIRM_DEFAULT },
+          { scope: MappingScope.CLIENT_OVERRIDE, clientId },
+        ],
+      },
+    });
+
+    const mappingsByProduct = new Map<string, (typeof productMaps)[number]>();
+    for (const m of productMaps) {
+      const existing = mappingsByProduct.get(m.productId);
+      if (!existing || m.scope === MappingScope.CLIENT_OVERRIDE) {
+        mappingsByProduct.set(m.productId, m);
+      }
+    }
+
+    const mappings: MappingInput[] = [];
+    for (const [, m] of mappingsByProduct) {
+      const node = nodeById.get(m.nodeId);
+      if (!node) continue;
+      const rb = riskBucketById.get(m.nodeId);
+      mappings.push({
+        productId: m.productId,
+        nodeId: m.nodeId,
+        nodeName: node.name,
+        nodeType: node.nodeType,
+        riskBucketId: rb?.id ?? null,
+        riskBucketName: rb?.name ?? null,
+      });
+    }
+
+    const holdingInputs: HoldingInput[] = accounts.flatMap((a) =>
+      a.holdings.map((h) => ({
+        productId: h.productId,
+        productName: h.product.name,
+        productType: h.product.type,
+        marketValue: h.marketValue,
+        lookthrough: h.lookthroughHoldings.map((lt) => ({
+          underlyingProductId: lt.underlyingProductId,
+          underlyingProductName: lt.underlyingProduct.name,
+          underlyingMarketValue: lt.underlyingMarketValue,
+          weight: lt.weight,
+        })),
+      })),
+    );
+
+    const allocation = computeAllocation(holdingInputs, mappings);
+
+    // Build current weights from allocation
+    const currentWeights: CurrentWeightInput[] = allocation.buckets.flatMap((b) =>
+      b.assetClasses.map((ac) => ({
+        nodeId: ac.nodeId,
+        nodeName: ac.nodeName,
+        nodeType: "ASSET_CLASS",
+        riskBucketId: b.riskBucketId,
+        riskBucketName: b.riskBucketName,
+        weight: ac.pctOfTotal,
+      })),
+    );
+
+    // Build targets from SAA allocations
+    const targets: TargetInput[] = saa.allocations.map((a) => ({
+      nodeId: a.nodeId,
+      targetWeight: a.targetWeight,
+      minWeight: a.minWeight,
+      maxWeight: a.maxWeight,
+    }));
+
+    driftResult = computeDrift(currentWeights, targets);
+  }
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+        Strategic Asset Allocation
+      </h2>
+
+      <div className="mt-3">
+        <SAASelector clientId={clientId} currentSaaId={currentSaaId} saas={saas} />
+      </div>
+
+      {driftResult && (
+        <div className="mt-4">
+          <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Drift Analysis
+          </h3>
+          <DriftView drift={driftResult} />
+        </div>
+      )}
+
+      {currentSaaId && !driftResult && (
+        <p className="mt-4 text-sm text-zinc-400">
+          Unable to compute drift. Check taxonomy mappings.
+        </p>
+      )}
+    </div>
+  );
 }

@@ -4,6 +4,8 @@ import { logoutAction } from "./actions";
 
 const ADMIN_LINKS = [
   { href: "/admin/taxonomy", label: "Taxonomy" },
+  { href: "/adviser/saa", label: "Strategic Asset Allocation" },
+  { href: "/clients", label: "Clients" },
   { href: "/admin/cma", label: "Capital Market Assumptions" },
   { href: "/admin/stress-tests", label: "Stress Tests" },
   { href: "/admin/pm-funds", label: "Private Markets Funds" },
