@@ -50,6 +50,7 @@ model Client {
   clientSleeve   ClientSleeve?
   orders         Order[]
   stressResults  StressResult[]
+  rebalancePlans RebalancePlan[]
 }
 
 // ── Platform / Holdings ─────────────────────────────────
@@ -90,6 +91,7 @@ model Product {
   sleeveLiquidPositions SleeveLiquidPosition[]
   recommendationLegs    SleeveRecommendationLeg[]
   orders                Order[]
+  rebalanceTrades       RebalanceTrade[]
 }
 
 model Holding {
@@ -136,6 +138,7 @@ model SAA {
   adviser     Adviser?      @relation(fields: [adviserId], references: [id])
   allocations SAAAllocation[]
   clientSAAs  ClientSAA[]
+  rebalancePlans RebalancePlan[]
 }
 
 model SAAAllocation {
@@ -506,6 +509,63 @@ model StressResult {
 
   run    StressRun @relation(fields: [stressRunId], references: [id], onDelete: Cascade)
   client Client    @relation(fields: [clientId], references: [id])
+}
+
+// ── Rebalance ───────────────────────────────────────────
+
+enum RebalanceStatus {
+  DRAFT
+  ADVISER_APPROVED
+  CLIENT_APPROVED
+  REJECTED
+}
+
+enum RebalanceSide {
+  BUY
+  SELL
+}
+
+enum RebalanceApprovalAction {
+  APPROVE
+  REJECT
+}
+
+model RebalancePlan {
+  id        String          @id @default(cuid())
+  clientId  String
+  saaId     String
+  status    RebalanceStatus @default(DRAFT)
+  summaryJson String        // JSON: before/after drift summary
+  createdAt DateTime        @default(now())
+
+  client Client           @relation(fields: [clientId], references: [id])
+  saa    SAA              @relation(fields: [saaId], references: [id])
+  trades RebalanceTrade[]
+  events RebalanceApprovalEvent[]
+}
+
+model RebalanceTrade {
+  id        String        @id @default(cuid())
+  planId    String
+  productId String
+  side      RebalanceSide
+  amount    Float
+  reason    String
+
+  plan    RebalancePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  product Product       @relation(fields: [productId], references: [id])
+}
+
+model RebalanceApprovalEvent {
+  id          String                  @id @default(cuid())
+  planId      String
+  action      RebalanceApprovalAction
+  actorUserId String
+  actorRole   String
+  note        String?
+  createdAt   DateTime                @default(now())
+
+  plan RebalancePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
 }
 
 // ── Capital Market Assumptions ──────────────────────────

@@ -30,6 +30,7 @@ import { AllocationView } from "./allocation-view";
 import { SAASelector } from "./saa-selector";
 import { DriftView } from "./drift-view";
 import { CreateSleeveForm, SleeveSummary } from "./sleeve-view";
+import { RebalanceGenerateButton, RebalancePlanCard } from "./rebalance-view";
 import { computeExpectedOutcomes, type CMAInput, type WeightInput, type CMAResult } from "@/lib/cma";
 
 export default async function ClientDetailPage({
@@ -135,6 +136,7 @@ export default async function ClientDetailPage({
             <AllocationSection accounts={client.accounts} clientId={id} />
             <SAASection clientId={id} accounts={client.accounts} />
             <ExpectedOutcomesSection clientId={id} accounts={client.accounts} />
+            <RebalanceSection clientId={id} />
             <SleeveSection clientId={id} />
           </>
         )}
@@ -666,6 +668,74 @@ async function ExpectedOutcomesSection({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+async function RebalanceSection({ clientId }: { clientId: string }) {
+  // Check if SAA is assigned
+  const clientSAA = await prisma.clientSAA.findUnique({
+    where: { clientId },
+    select: { saaId: true, saa: { select: { name: true } } },
+  });
+
+  if (!clientSAA) return null;
+
+  // Fetch recent rebalance plans
+  const plans = await prisma.rebalancePlan.findMany({
+    where: { clientId },
+    include: {
+      trades: {
+        include: { product: { select: { name: true } } },
+      },
+      events: { orderBy: { createdAt: "asc" } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+  });
+
+  const plansForUI = plans.map((p) => {
+    let summary;
+    try { summary = JSON.parse(p.summaryJson); } catch { summary = { totalPortfolioValue: 0, breachesBefore: 0, breachesAfter: 0, beforeDrift: [], afterDrift: [] }; }
+    return {
+      id: p.id,
+      status: p.status as string,
+      summary,
+      createdAt: p.createdAt.toISOString(),
+      trades: p.trades.map((t) => ({
+        id: t.id,
+        productId: t.productId,
+        productName: t.product.name,
+        side: t.side as string,
+        amount: t.amount,
+        reason: t.reason,
+      })),
+      events: p.events.map((e) => ({
+        id: e.id,
+        action: e.action as string,
+        actorRole: e.actorRole,
+        note: e.note,
+        createdAt: e.createdAt.toISOString(),
+      })),
+    };
+  });
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+        Rebalance
+      </h2>
+      <p className="mt-1 text-xs text-zinc-400">SAA: {clientSAA.saa.name}</p>
+
+      <RebalanceGenerateButton clientId={clientId} />
+
+      {plansForUI.length > 0 ? (
+        plansForUI.map((plan) => (
+          <RebalancePlanCard key={plan.id} plan={plan} />
+        ))
+      ) : (
+        <p className="mt-3 text-sm text-zinc-400">No rebalance plans yet.</p>
+      )}
     </div>
   );
 }
