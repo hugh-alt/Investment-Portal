@@ -4,7 +4,10 @@
       "Bash(gh auth:*)",
       "Bash(gh repo:*)",
       "Bash(ssh:*)",
-      "Bash(gh ssh-key:*)"
+      "Bash(gh ssh-key:*)",
+      "Bash(npm install:*)",
+      "Bash(npx prisma:*)",
+      "Bash(npx tsx:*)"
     ]
   }
 }
