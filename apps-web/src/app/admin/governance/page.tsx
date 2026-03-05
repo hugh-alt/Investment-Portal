@@ -15,6 +15,14 @@ import {
 } from "@/lib/governance";
 import { GovernanceDashboard } from "./governance-tables";
 import { MappingScope, TaxonomyNodeType } from "@/generated/prisma/enums";
+import {
+  buildLiquidityLadder,
+  buildClientLiquidityRiskRows,
+  type LiquidityProfileData,
+  type ProductMapping as LPProductMapping,
+  type TaxonomyNode as LPTaxNode,
+  type ExposureInput,
+} from "@/lib/liquidity-profile";
 
 export default async function GovernancePage() {
   // Fetch all clients with adviser, accounts+holdings, SAA, sleeves
@@ -302,6 +310,91 @@ export default async function GovernancePage() {
 
   const summary = computeSummary(driftRows, sleeveRows, pendingApprovals, rebalanceRows, rebalanceOrdersPendingFill);
 
+  // ── Liquidity Risk (profile-based ladder per client) ──
+  const productOverridesRaw = await prisma.productLiquidityOverride.findMany({
+    include: { profile: true },
+  });
+  const lpOverrides = new Map<string, LiquidityProfileData>(
+    productOverridesRaw.map((o) => [
+      o.productId,
+      { tier: o.profile.tier, horizonDays: o.profile.horizonDays, stressedHaircutPct: o.profile.stressedHaircutPct, gateOrSuspendRisk: o.profile.gateOrSuspendRisk },
+    ]),
+  );
+
+  const taxDefaultsRaw = await prisma.taxonomyLiquidityDefault.findMany({
+    include: { profile: true },
+  });
+  const lpTaxDefaults = new Map<string, LiquidityProfileData>(
+    taxDefaultsRaw.map((d) => [
+      d.taxonomyNodeId,
+      { tier: d.profile.tier, horizonDays: d.profile.horizonDays, stressedHaircutPct: d.profile.stressedHaircutPct, gateOrSuspendRisk: d.profile.gateOrSuspendRisk },
+    ]),
+  );
+
+  // Fetch taxonomy for node tree (reuse first taxonomy)
+  const govTaxonomy = await prisma.taxonomy.findFirst({
+    include: { nodes: true, productMaps: { where: { scope: MappingScope.FIRM_DEFAULT } } },
+    orderBy: { createdAt: "asc" },
+  });
+  const lpNodes = new Map<string, LPTaxNode>(
+    (govTaxonomy?.nodes ?? []).map((n) => [n.id, { id: n.id, parentId: n.parentId }]),
+  );
+  const lpMappings: LPProductMapping[] = (govTaxonomy?.productMaps ?? []).map((m) => ({
+    productId: m.productId,
+    nodeId: m.nodeId,
+  }));
+
+  const liquidityRiskInputs = clients.map((c) => {
+    // Build exposures using look-through
+    const exposures: ExposureInput[] = [];
+    for (const account of c.accounts) {
+      for (const h of account.holdings) {
+        if (h.product.type === "MANAGED_PORTFOLIO" && h.lookthroughHoldings.length > 0) {
+          for (const lt of h.lookthroughHoldings) {
+            exposures.push({
+              productId: lt.underlyingProductId,
+              productName: lt.underlyingProduct.name,
+              marketValue: lt.underlyingMarketValue,
+            });
+          }
+        } else {
+          exposures.push({
+            productId: h.productId,
+            productName: h.product.name,
+            marketValue: h.marketValue,
+          });
+        }
+      }
+    }
+
+    // Aggregate by product
+    const byProduct = new Map<string, ExposureInput>();
+    for (const e of exposures) {
+      const existing = byProduct.get(e.productId);
+      if (existing) existing.marketValue += e.marketValue;
+      else byProduct.set(e.productId, { ...e });
+    }
+
+    const ladder = buildLiquidityLadder(
+      [...byProduct.values()],
+      lpMappings,
+      lpOverrides,
+      lpTaxDefaults,
+      lpNodes,
+    );
+
+    return {
+      clientId: c.id,
+      clientName: c.name,
+      adviserName: c.adviser.user.name,
+      adviserId: c.adviserId,
+      ladder,
+    };
+  });
+
+  const liquidityRiskRows = buildClientLiquidityRiskRows(liquidityRiskInputs)
+    .sort((a, b) => a.pctLiquid30d - b.pctLiquid30d); // lowest 30d first
+
   // Build adviser list for filter dropdown
   const adviserMap = new Map<string, string>();
   for (const c of clients) {
@@ -326,6 +419,7 @@ export default async function GovernancePage() {
           driftRows={driftRows}
           sleeveRows={sleeveRows}
           rebalanceRows={rebalanceRows}
+          liquidityRiskRows={liquidityRiskRows}
           advisers={advisers}
         />
       </div>

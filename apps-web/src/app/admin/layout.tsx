@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { href: "/admin/cma", label: "CMA" },
   { href: "/admin/stress-tests", label: "Stress Tests" },
   { href: "/admin/pm-funds", label: "Approved PM Funds" },
+  { href: "/admin/products", label: "Products" },
   { href: "/admin/governance", label: "Governance" },
 ];
 

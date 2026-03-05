@@ -30,8 +30,25 @@ export async function seedSAA(prisma: PrismaClient, adviserId: string, clientIds
   const ausEqDef = nodeByKey.get(`${defensiveBucket.id}:Australian Equities`);
   const fixedInc = nodeByKey.get(`${defensiveBucket.id}:Fixed Income`);
 
-  // Clean existing SAAs for idempotency
+  // Clean existing SAAs for idempotency — delete dependents first
+  // 1. Orders + events from rebalance plans
+  const existingPlans = await prisma.rebalancePlan.findMany({ select: { id: true } });
+  const planIds = existingPlans.map((p) => p.id);
+  if (planIds.length > 0) {
+    await prisma.orderEvent.deleteMany({
+      where: { order: { source: "REBALANCE_PLAN", sourceId: { in: planIds } } },
+    });
+    await prisma.order.deleteMany({
+      where: { source: "REBALANCE_PLAN", sourceId: { in: planIds } },
+    });
+  }
+  // 2. Rebalance chain
+  await prisma.rebalanceTrade.deleteMany({});
+  await prisma.rebalanceApprovalEvent.deleteMany({});
+  await prisma.rebalancePlan.deleteMany({});
+  // 3. SAA
   await prisma.clientSAA.deleteMany({});
+  await prisma.sAAAllocation.deleteMany({});
   await prisma.sAA.deleteMany({});
 
   // 1. Firm SAA — "Balanced Growth"

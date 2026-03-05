@@ -9,6 +9,7 @@ import { seedPM } from "./seed-pm";
 import { seedStress } from "./seed-stress";
 import { seedCMA } from "./seed-cma";
 import { seedRebalance } from "./seed-rebalance";
+import { seedLiquidityProfiles } from "./seed-liquidity-profiles";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -147,14 +148,6 @@ async function main() {
     });
   }
 
-  // ── Cleanup: remove any leftover LIQUIDITY nodes ──
-  const deleted = await prisma.taxonomyNode.deleteMany({
-    where: { nodeType: TaxonomyNodeType.LIQUIDITY },
-  });
-  if (deleted.count > 0) {
-    console.log(`Cleaned up ${deleted.count} LIQUIDITY node(s)`);
-  }
-
   // ── Platform holdings ──
   const clientIds = CLIENT_NAMES.map(
     (name) => `seed-${name.toLowerCase().replace(/\s/g, "-")}`,
@@ -179,12 +172,15 @@ async function main() {
   // ── Rebalance (CLIENT_APPROVED plan for demo) ──
   await seedRebalance(prisma, clientIds[0], adviserUser.id);
 
+  // ── Liquidity Profiles ──
+  await seedLiquidityProfiles(prisma);
+
   console.log("Seeded 4 demo users:");
   console.log("  SUPER_ADMIN : superadmin@reachalts.com.au");
   console.log("  ADMIN       : admin@reachalts.com.au");
   console.log("  ADVISER     : adviser@reachalts.com.au");
   console.log("  ADMIN+Adviser: adminadviser@reachalts.com.au");
-  console.log("Plus 5 clients, taxonomy, holdings, mappings, SAAs, PM funds + sleeves, stress tests, CMA, rebalance");
+  console.log("Plus 5 clients, taxonomy, holdings, mappings, SAAs, PM funds + sleeves, stress tests, CMA, rebalance, liquidity profiles");
 }
 
 main()

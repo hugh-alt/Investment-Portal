@@ -92,6 +92,7 @@ model Product {
   recommendationLegs    SleeveRecommendationLeg[]
   orders                Order[]
   rebalanceTrades       RebalanceTrade[]
+  liquidityOverride     ProductLiquidityOverride?
 }
 
 model Holding {
@@ -226,10 +227,11 @@ model TaxonomyNode {
   taxonomy        Taxonomy             @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
   parent          TaxonomyNode?        @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
   children        TaxonomyNode[]       @relation("NodeTree")
-  productMaps     ProductTaxonomyMap[]
-  saaAllocations  SAAAllocation[]
-  stressShocks    StressShock[]
-  cmaAssumptions  CMAAssumption[]
+  productMaps      ProductTaxonomyMap[]
+  saaAllocations   SAAAllocation[]
+  stressShocks     StressShock[]
+  cmaAssumptions   CMAAssumption[]
+  liquidityDefault TaxonomyLiquidityDefault?
 }
 
 // ── Private Markets ──────────────────────────────────────
@@ -594,4 +596,55 @@ model CMAAssumption {
   node   TaxonomyNode @relation(fields: [taxonomyNodeId], references: [id])
 
   @@unique([cmaSetId, taxonomyNodeId])
+}
+
+// ── Liquidity Profiles ──────────────────────────────────
+
+enum LiquidityTier {
+  LISTED
+  FUND_LIQUID
+  FUND_SEMI_LIQUID
+  PRIVATE
+  LOCKED
+}
+
+enum LiquidityOverrideSource {
+  PLATFORM_SUPER_ADMIN
+}
+
+model LiquidityProfile {
+  id                 String        @id @default(cuid())
+  tier               LiquidityTier
+  horizonDays        Int           // e.g. 2, 30, 90, 365, 730
+  stressedHaircutPct Float         // e.g. 0.02 for 2%
+  noticeDays         Int?
+  redeemFrequency    String?       // e.g. "Daily", "Monthly", "Quarterly"
+  gatePctPerPeriod   Float?        // e.g. 0.25 for 25%
+  gateOrSuspendRisk  Boolean       @default(false)
+  lockupEndDate      DateTime?
+  createdAt          DateTime      @default(now())
+
+  taxonomyDefaults  TaxonomyLiquidityDefault[]
+  productOverrides  ProductLiquidityOverride[]
+}
+
+model TaxonomyLiquidityDefault {
+  id                 String   @id @default(cuid())
+  taxonomyNodeId     String   @unique
+  liquidityProfileId String
+  createdAt          DateTime @default(now())
+
+  node    TaxonomyNode     @relation(fields: [taxonomyNodeId], references: [id], onDelete: Cascade)
+  profile LiquidityProfile @relation(fields: [liquidityProfileId], references: [id], onDelete: Cascade)
+}
+
+model ProductLiquidityOverride {
+  id                 String                  @id @default(cuid())
+  productId          String                  @unique
+  liquidityProfileId String
+  source             LiquidityOverrideSource @default(PLATFORM_SUPER_ADMIN)
+  createdAt          DateTime                @default(now())
+
+  product Product          @relation(fields: [productId], references: [id])
+  profile LiquidityProfile @relation(fields: [liquidityProfileId], references: [id], onDelete: Cascade)
 }

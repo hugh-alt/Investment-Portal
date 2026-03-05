@@ -32,6 +32,14 @@ import { DriftView } from "./drift-view";
 import { CreateSleeveForm, SleeveSummary } from "./sleeve-view";
 import { RebalanceGenerateButton, RebalancePlanCard } from "./rebalance-view";
 import { computeExpectedOutcomes, type CMAInput, type WeightInput, type CMAResult } from "@/lib/cma";
+import {
+  buildLiquidityLadder,
+  type LiquidityProfileData,
+  type ProductMapping as LPProductMapping,
+  type TaxonomyNode as LPTaxNode,
+  type ExposureInput,
+} from "@/lib/liquidity-profile";
+import { LiquidityLadderView } from "./liquidity-ladder-view";
 
 export default async function ClientDetailPage({
   params,
@@ -134,6 +142,7 @@ export default async function ClientDetailPage({
             ))}
 
             <AllocationSection accounts={client.accounts} clientId={id} />
+            <LiquidityLadderSection accounts={client.accounts} clientId={id} />
             <SAASection clientId={id} accounts={client.accounts} />
             <ExpectedOutcomesSection clientId={id} accounts={client.accounts} />
             <RebalanceSection clientId={id} />
@@ -246,6 +255,147 @@ async function AllocationSection({
   const allocation = computeAllocation(holdingInputs, mappings);
 
   return <AllocationView allocation={allocation} />;
+}
+
+async function LiquidityLadderSection({
+  accounts,
+  clientId,
+}: {
+  accounts: {
+    holdings: {
+      productId: string;
+      marketValue: number;
+      product: { name: string; type: string };
+      lookthroughHoldings: {
+        underlyingProductId: string;
+        underlyingMarketValue: number;
+        weight: number;
+        underlyingProduct: { name: string };
+      }[];
+    }[];
+  }[];
+  clientId: string;
+}) {
+  // Fetch taxonomy, mappings, overrides, and defaults
+  const taxonomy = await prisma.taxonomy.findFirst({
+    include: {
+      nodes: true,
+      productMaps: {
+        where: {
+          OR: [
+            { scope: MappingScope.FIRM_DEFAULT },
+            { scope: MappingScope.CLIENT_OVERRIDE, clientId },
+          ],
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  // Fetch product overrides
+  const productOverridesRaw = await prisma.productLiquidityOverride.findMany({
+    include: { profile: true },
+  });
+  const overrides = new Map<string, LiquidityProfileData>(
+    productOverridesRaw.map((o) => [
+      o.productId,
+      {
+        tier: o.profile.tier,
+        horizonDays: o.profile.horizonDays,
+        stressedHaircutPct: o.profile.stressedHaircutPct,
+        gateOrSuspendRisk: o.profile.gateOrSuspendRisk,
+      },
+    ]),
+  );
+
+  // Fetch taxonomy defaults
+  const taxDefaultsRaw = await prisma.taxonomyLiquidityDefault.findMany({
+    include: { profile: true },
+  });
+  const taxonomyDefaults = new Map<string, LiquidityProfileData>(
+    taxDefaultsRaw.map((d) => [
+      d.taxonomyNodeId,
+      {
+        tier: d.profile.tier,
+        horizonDays: d.profile.horizonDays,
+        stressedHaircutPct: d.profile.stressedHaircutPct,
+        gateOrSuspendRisk: d.profile.gateOrSuspendRisk,
+      },
+    ]),
+  );
+
+  // Build nodes map for tree-walk
+  const nodes = new Map<string, LPTaxNode>(
+    (taxonomy?.nodes ?? []).map((n) => [n.id, { id: n.id, parentId: n.parentId }]),
+  );
+
+  // Build product mappings
+  const productMappings: LPProductMapping[] = (taxonomy?.productMaps ?? []).map((m) => ({
+    productId: m.productId,
+    nodeId: m.nodeId,
+  }));
+
+  // Build exposures using look-through for managed portfolios
+  const exposures: ExposureInput[] = [];
+  for (const account of accounts) {
+    for (const h of account.holdings) {
+      if (h.product.type === "MANAGED_PORTFOLIO" && h.lookthroughHoldings.length > 0) {
+        for (const lt of h.lookthroughHoldings) {
+          exposures.push({
+            productId: lt.underlyingProductId,
+            productName: lt.underlyingProduct.name,
+            marketValue: lt.underlyingMarketValue,
+          });
+        }
+      } else {
+        exposures.push({
+          productId: h.productId,
+          productName: h.product.name,
+          marketValue: h.marketValue,
+        });
+      }
+    }
+  }
+
+  // Aggregate exposures by product
+  const byProduct = new Map<string, ExposureInput>();
+  for (const e of exposures) {
+    const existing = byProduct.get(e.productId);
+    if (existing) {
+      existing.marketValue += e.marketValue;
+    } else {
+      byProduct.set(e.productId, { ...e });
+    }
+  }
+  const aggregated = [...byProduct.values()];
+
+  const ladder = buildLiquidityLadder(
+    aggregated,
+    productMappings,
+    overrides,
+    taxonomyDefaults,
+    nodes,
+  );
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+        Liquidity Ladder
+      </h2>
+      <p className="mt-1 text-sm text-zinc-500">
+        Available liquidity by horizon, with stressed haircuts applied.
+      </p>
+      <div className="mt-3">
+        <LiquidityLadderView
+          buckets={ladder.buckets}
+          totalPortfolioValue={ladder.totalPortfolioValue}
+          assumedCount={ladder.assumedCount}
+          gatedCount={ladder.gatedCount}
+          exposures={ladder.exposures}
+        />
+      </div>
+    </div>
+  );
 }
 
 async function SAASection({

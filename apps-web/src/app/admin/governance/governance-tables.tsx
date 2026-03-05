@@ -8,6 +8,7 @@ import type {
   RebalanceGovernanceRow,
   GovernanceSummary,
 } from "@/lib/governance";
+import type { ClientLiquidityRiskRow } from "@/lib/liquidity-profile";
 import { formatDate } from "@/lib/format";
 
 const pct = (v: number) => (v * 100).toFixed(1) + "%";
@@ -52,12 +53,14 @@ export function GovernanceDashboard({
   driftRows,
   sleeveRows,
   rebalanceRows,
+  liquidityRiskRows,
   advisers,
 }: {
   summary: GovernanceSummary;
   driftRows: ClientDriftRow[];
   sleeveRows: SleeveGovernanceRow[];
   rebalanceRows: RebalanceGovernanceRow[];
+  liquidityRiskRows: ClientLiquidityRiskRow[];
   advisers: { id: string; name: string }[];
 }) {
   const [adviserFilter, setAdviserFilter] = useState("ALL");
@@ -88,6 +91,11 @@ export function GovernanceDashboard({
     if (rebalanceFilter === "EXECUTING") {
       return r.latestPlanStatus === "CLIENT_APPROVED";
     }
+    return true;
+  });
+
+  const filteredLiquidityRisk = liquidityRiskRows.filter((r) => {
+    if (adviserFilter !== "ALL" && r.adviserId !== adviserFilter) return false;
     return true;
   });
 
@@ -328,6 +336,80 @@ export function GovernanceDashboard({
                 <td className="py-2 text-right">
                   {r.activeAlertCount > 0 ? (
                     <span className="font-medium text-yellow-600 dark:text-yellow-400">{r.activeAlertCount}</span>
+                  ) : (
+                    <span className="text-zinc-400">0</span>
+                  )}
+                </td>
+                <td className="py-2 text-right">
+                  <Link
+                    href={`/clients/${r.clientId}`}
+                    className="text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100"
+                  >
+                    View
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Liquidity Risk table */}
+      <div className="mt-8">
+        <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+          Liquidity Risk
+        </h2>
+        <p className="mt-1 text-sm text-zinc-500">
+          Portfolio liquidity by horizon (sorted by lowest 30d liquidity).
+        </p>
+        <table className="mt-3 w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+              <th className="pb-2 font-medium text-zinc-500">Client</th>
+              <th className="pb-2 font-medium text-zinc-500">Adviser</th>
+              <th className="pb-2 text-right font-medium text-zinc-500">Total value</th>
+              <th className="pb-2 text-right font-medium text-zinc-500">Liquid ≤30d</th>
+              <th className="pb-2 text-right font-medium text-zinc-500">Liquid ≤90d</th>
+              <th className="pb-2 text-right font-medium text-zinc-500">Assumed</th>
+              <th className="pb-2 text-right font-medium text-zinc-500">Gated</th>
+              <th className="pb-2 font-medium text-zinc-500"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredLiquidityRisk.length === 0 && (
+              <tr>
+                <td colSpan={8} className="py-4 text-center text-zinc-400">
+                  No clients match filters
+                </td>
+              </tr>
+            )}
+            {filteredLiquidityRisk.map((r) => (
+              <tr key={r.clientId} className="border-b border-zinc-100 dark:border-zinc-800">
+                <td className="py-2 text-zinc-900 dark:text-zinc-100">{r.clientName}</td>
+                <td className="py-2 text-zinc-600 dark:text-zinc-400">{r.adviserName}</td>
+                <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
+                  {fmt(r.totalValue)}
+                </td>
+                <td className="py-2 text-right">
+                  <span className={r.pctLiquid30d < 0.3 ? "font-medium text-red-600 dark:text-red-400" : "text-zinc-600 dark:text-zinc-400"}>
+                    {pct(r.pctLiquid30d)}
+                  </span>
+                </td>
+                <td className="py-2 text-right">
+                  <span className={r.pctLiquid90d < 0.5 ? "font-medium text-yellow-600 dark:text-yellow-400" : "text-zinc-600 dark:text-zinc-400"}>
+                    {pct(r.pctLiquid90d)}
+                  </span>
+                </td>
+                <td className="py-2 text-right">
+                  {r.assumedCount > 0 ? (
+                    <span className="font-medium text-yellow-600 dark:text-yellow-400">{r.assumedCount}</span>
+                  ) : (
+                    <span className="text-zinc-400">0</span>
+                  )}
+                </td>
+                <td className="py-2 text-right">
+                  {r.gatedCount > 0 ? (
+                    <span className="font-medium text-red-600 dark:text-red-400">{r.gatedCount}</span>
                   ) : (
                     <span className="text-zinc-400">0</span>
                   )}
