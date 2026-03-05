@@ -7,6 +7,7 @@ import { seedMappings } from "./seed-mappings";
 import { seedSAA } from "./seed-saa";
 import { seedPM } from "./seed-pm";
 import { seedStress } from "./seed-stress";
+import { seedCMA } from "./seed-cma";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -171,12 +172,15 @@ async function main() {
   // ── Stress Tests ──
   await seedStress(prisma, admin.id);
 
+  // ── CMA ──
+  await seedCMA(prisma, admin.id);
+
   console.log("Seeded 4 demo users:");
   console.log("  SUPER_ADMIN : superadmin@reachalts.com.au");
   console.log("  ADMIN       : admin@reachalts.com.au");
   console.log("  ADVISER     : adviser@reachalts.com.au");
   console.log("  ADMIN+Adviser: adminadviser@reachalts.com.au");
-  console.log("Plus 5 clients, taxonomy, holdings, mappings, SAAs, PM funds + sleeves, stress tests");
+  console.log("Plus 5 clients, taxonomy, holdings, mappings, SAAs, PM funds + sleeves, stress tests, CMA");
 }
 
 main()

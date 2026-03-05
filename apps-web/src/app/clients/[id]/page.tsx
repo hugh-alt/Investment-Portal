@@ -30,6 +30,7 @@ import { AllocationView } from "./allocation-view";
 import { SAASelector } from "./saa-selector";
 import { DriftView } from "./drift-view";
 import { CreateSleeveForm, SleeveSummary } from "./sleeve-view";
+import { computeExpectedOutcomes, type CMAInput, type WeightInput, type CMAResult } from "@/lib/cma";
 
 export default async function ClientDetailPage({
   params,
@@ -133,6 +134,7 @@ export default async function ClientDetailPage({
 
             <AllocationSection accounts={client.accounts} clientId={id} />
             <SAASection clientId={id} accounts={client.accounts} />
+            <ExpectedOutcomesSection clientId={id} accounts={client.accounts} />
             <SleeveSection clientId={id} />
           </>
         )}
@@ -407,6 +409,263 @@ async function SAASection({
           Unable to compute drift. Check taxonomy mappings.
         </p>
       )}
+    </div>
+  );
+}
+
+const pctFmt = (v: number) => (v * 100).toFixed(1) + "%";
+
+async function ExpectedOutcomesSection({
+  clientId,
+  accounts,
+}: {
+  clientId: string;
+  accounts: {
+    holdings: {
+      productId: string;
+      marketValue: number;
+      product: { name: string; type: string };
+      lookthroughHoldings: {
+        underlyingProductId: string;
+        underlyingMarketValue: number;
+        weight: number;
+        underlyingProduct: { name: string };
+      }[];
+    }[];
+  }[];
+}) {
+  // Find the default CMA set
+  const defaultCMA = await prisma.cMASet.findFirst({
+    where: { isDefault: true },
+    include: { assumptions: true },
+  });
+
+  if (!defaultCMA) return null;
+
+  const cmaInputs: CMAInput[] = defaultCMA.assumptions.map((a) => ({
+    nodeId: a.taxonomyNodeId,
+    expReturnPct: a.expReturnPct,
+    volPct: a.volPct,
+  }));
+
+  // Get taxonomy + mappings for allocation computation
+  const taxonomy = await prisma.taxonomy.findFirst({
+    include: {
+      nodes: true,
+      productMaps: {
+        where: {
+          OR: [
+            { scope: MappingScope.FIRM_DEFAULT },
+            { scope: MappingScope.CLIENT_OVERRIDE, clientId },
+          ],
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (!taxonomy) return null;
+
+  const riskBucketById = new Map<string, { id: string; name: string }>();
+  const riskBuckets = taxonomy.nodes.filter((n) => n.nodeType === TaxonomyNodeType.RISK);
+  for (const rb of riskBuckets) {
+    riskBucketById.set(rb.id, { id: rb.id, name: rb.name });
+  }
+  for (const n of taxonomy.nodes) {
+    if (n.parentId && riskBucketById.has(n.parentId)) {
+      riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
+    }
+  }
+  for (const n of taxonomy.nodes) {
+    if (n.parentId && riskBucketById.has(n.parentId) && !riskBucketById.has(n.id)) {
+      riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
+    }
+  }
+
+  const nodeById = new Map(taxonomy.nodes.map((n) => [n.id, n]));
+
+  const mappingsByProduct = new Map<string, typeof taxonomy.productMaps[number]>();
+  for (const m of taxonomy.productMaps) {
+    const existing = mappingsByProduct.get(m.productId);
+    if (!existing || m.scope === MappingScope.CLIENT_OVERRIDE) {
+      mappingsByProduct.set(m.productId, m);
+    }
+  }
+
+  const mappings: MappingInput[] = [];
+  for (const [, m] of mappingsByProduct) {
+    const node = nodeById.get(m.nodeId);
+    if (!node) continue;
+    const rb = riskBucketById.get(m.nodeId);
+    mappings.push({
+      productId: m.productId,
+      nodeId: m.nodeId,
+      nodeName: node.name,
+      nodeType: node.nodeType,
+      riskBucketId: rb?.id ?? null,
+      riskBucketName: rb?.name ?? null,
+    });
+  }
+
+  const holdingInputs: HoldingInput[] = accounts.flatMap((a) =>
+    a.holdings.map((h) => ({
+      productId: h.productId,
+      productName: h.product.name,
+      productType: h.product.type,
+      marketValue: h.marketValue,
+      lookthrough: h.lookthroughHoldings.map((lt) => ({
+        underlyingProductId: lt.underlyingProductId,
+        underlyingProductName: lt.underlyingProduct.name,
+        underlyingMarketValue: lt.underlyingMarketValue,
+        weight: lt.weight,
+      })),
+    })),
+  );
+
+  const allocation = computeAllocation(holdingInputs, mappings);
+
+  // Build current portfolio weights
+  const currentWeights: WeightInput[] = allocation.buckets.flatMap((b) =>
+    b.assetClasses.map((ac) => ({
+      nodeId: ac.nodeId,
+      nodeName: ac.nodeName,
+      weight: ac.pctOfTotal,
+    })),
+  );
+
+  const portfolioResult = computeExpectedOutcomes(currentWeights, cmaInputs);
+
+  // Compute SAA expected outcomes if assigned
+  let saaResult: CMAResult | null = null;
+  let saaName: string | null = null;
+
+  const clientSAA = await prisma.clientSAA.findUnique({
+    where: { clientId },
+    include: {
+      saa: {
+        include: { allocations: { include: { node: true } } },
+      },
+    },
+  });
+
+  if (clientSAA?.saa) {
+    saaName = clientSAA.saa.name;
+    const saaWeights: WeightInput[] = clientSAA.saa.allocations.map((a) => ({
+      nodeId: a.nodeId,
+      nodeName: a.node.name,
+      weight: a.targetWeight,
+    }));
+    saaResult = computeExpectedOutcomes(saaWeights, cmaInputs);
+  }
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+        Expected Outcomes
+      </h2>
+      <p className="mt-1 text-xs text-zinc-400">
+        Based on: {defaultCMA.name}
+      </p>
+
+      <div className={`mt-3 grid gap-4 ${saaResult ? "grid-cols-2" : "grid-cols-1"}`}>
+        {/* Current portfolio */}
+        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+          <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Current Portfolio
+          </h3>
+          <div className="mt-3 flex gap-6">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Exp. Return</p>
+              <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                {pctFmt(portfolioResult.expectedReturnPct)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Risk (vol)</p>
+              <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                {pctFmt(portfolioResult.riskProxyPct)}
+              </p>
+            </div>
+          </div>
+          {portfolioResult.missingCoveragePct > 0.005 && (
+            <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
+              Missing CMA coverage: {pctFmt(portfolioResult.missingCoveragePct)} of portfolio
+            </p>
+          )}
+          <table className="mt-3 w-full text-xs">
+            <thead>
+              <tr className="text-zinc-400">
+                <th className="pb-1 text-left font-medium">Node</th>
+                <th className="pb-1 text-right font-medium">Weight</th>
+                <th className="pb-1 text-right font-medium">Return</th>
+                <th className="pb-1 text-right font-medium">Vol</th>
+              </tr>
+            </thead>
+            <tbody>
+              {portfolioResult.details.map((d) => (
+                <tr key={d.nodeId}>
+                  <td className={`py-0.5 ${d.hasCMA ? "text-zinc-700 dark:text-zinc-300" : "text-zinc-400 italic"}`}>
+                    {d.nodeName}{!d.hasCMA && " *"}
+                  </td>
+                  <td className="py-0.5 text-right text-zinc-500">{pctFmt(d.weight)}</td>
+                  <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.expReturnPct) : "—"}</td>
+                  <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.volPct) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* SAA target */}
+        {saaResult && (
+          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              SAA: {saaName}
+            </h3>
+            <div className="mt-3 flex gap-6">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Exp. Return</p>
+                <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  {pctFmt(saaResult.expectedReturnPct)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Risk (vol)</p>
+                <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  {pctFmt(saaResult.riskProxyPct)}
+                </p>
+              </div>
+            </div>
+            {saaResult.missingCoveragePct > 0.005 && (
+              <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
+                Missing CMA coverage: {pctFmt(saaResult.missingCoveragePct)} of SAA
+              </p>
+            )}
+            <table className="mt-3 w-full text-xs">
+              <thead>
+                <tr className="text-zinc-400">
+                  <th className="pb-1 text-left font-medium">Node</th>
+                  <th className="pb-1 text-right font-medium">Target</th>
+                  <th className="pb-1 text-right font-medium">Return</th>
+                  <th className="pb-1 text-right font-medium">Vol</th>
+                </tr>
+              </thead>
+              <tbody>
+                {saaResult.details.map((d) => (
+                  <tr key={d.nodeId}>
+                    <td className={`py-0.5 ${d.hasCMA ? "text-zinc-700 dark:text-zinc-300" : "text-zinc-400 italic"}`}>
+                      {d.nodeName}{!d.hasCMA && " *"}
+                    </td>
+                    <td className="py-0.5 text-right text-zinc-500">{pctFmt(d.weight)}</td>
+                    <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.expReturnPct) : "—"}</td>
+                    <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.volPct) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

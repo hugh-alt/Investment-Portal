@@ -24,6 +24,7 @@ model User {
   taxonomies       Taxonomy[]
   stressScenarios  StressScenario[]
   stressRuns       StressRun[]
+  cmaSets          CMASet[]
 }
 
 model Adviser {
@@ -219,12 +220,13 @@ model TaxonomyNode {
   nodeType   TaxonomyNodeType
   sortOrder  Int              @default(0)
 
-  taxonomy       Taxonomy             @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
-  parent         TaxonomyNode?        @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children       TaxonomyNode[]       @relation("NodeTree")
-  productMaps    ProductTaxonomyMap[]
-  saaAllocations SAAAllocation[]
-  stressShocks   StressShock[]
+  taxonomy        Taxonomy             @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
+  parent          TaxonomyNode?        @relation("NodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children        TaxonomyNode[]       @relation("NodeTree")
+  productMaps     ProductTaxonomyMap[]
+  saaAllocations  SAAAllocation[]
+  stressShocks    StressShock[]
+  cmaAssumptions  CMAAssumption[]
 }
 
 // ── Private Markets ──────────────────────────────────────
@@ -504,4 +506,31 @@ model StressResult {
 
   run    StressRun @relation(fields: [stressRunId], references: [id], onDelete: Cascade)
   client Client    @relation(fields: [clientId], references: [id])
+}
+
+// ── Capital Market Assumptions ──────────────────────────
+
+model CMASet {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  isDefault       Boolean  @default(false)
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  createdBy   User            @relation(fields: [createdByUserId], references: [id])
+  assumptions CMAAssumption[]
+}
+
+model CMAAssumption {
+  id              String @id @default(cuid())
+  cmaSetId        String
+  taxonomyNodeId  String
+  expReturnPct    Float  // e.g. 0.08 for 8%
+  volPct          Float  // e.g. 0.15 for 15%
+
+  cmaSet CMASet       @relation(fields: [cmaSetId], references: [id], onDelete: Cascade)
+  node   TaxonomyNode @relation(fields: [taxonomyNodeId], references: [id])
+
+  @@unique([cmaSetId, taxonomyNodeId])
 }
