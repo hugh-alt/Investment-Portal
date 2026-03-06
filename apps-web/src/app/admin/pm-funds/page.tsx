@@ -1,14 +1,17 @@
-import { requireUser } from "@/lib/auth";
+import { requireUser, isSuperAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { FundList } from "./fund-list";
 import { CreateFundForm } from "./create-fund-form";
 
 export default async function PmFundsPage() {
-  await requireUser();
+  const user = await requireUser();
+  const userIsSuperAdmin = isSuperAdmin(user);
 
   const funds = await prisma.pMFund.findMany({
     include: {
-      approval: true,
+      approvals: {
+        where: user.wealthGroupId ? { wealthGroupId: user.wealthGroupId } : undefined,
+      },
       profile: true,
       _count: { select: { commitments: true } },
     },
@@ -25,7 +28,7 @@ export default async function PmFundsPage() {
     lifecycleStage: f.lifecycleStage,
     firstCloseDate: f.firstCloseDate?.toISOString().slice(0, 10) ?? null,
     fundTermMonths: f.fundTermMonths,
-    isApproved: f.approval?.isApproved ?? false,
+    isApproved: f.approvals.some((a) => a.isApproved),
     hasProfile: !!f.profile,
     commitmentCount: f._count.commitments,
   }));
@@ -38,12 +41,14 @@ export default async function PmFundsPage() {
         </h1>
       </div>
       <p className="mt-1 text-sm text-zinc-500">
-        Manage the private markets fund whitelist.
+        {userIsSuperAdmin
+          ? "Manage the global PM fund universe and truth data."
+          : "Whitelist PM funds for your wealth group."}
       </p>
 
-      <CreateFundForm />
+      {userIsSuperAdmin && <CreateFundForm />}
 
-      <FundList funds={fundData} />
+      <FundList funds={fundData} canEditProfile={userIsSuperAdmin} />
     </div>
   );
 }

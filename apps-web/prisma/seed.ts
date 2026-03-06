@@ -233,7 +233,7 @@ async function main() {
   await seedSAA(prisma, adviser.id, clientIds);
 
   // ── Private Markets ──
-  await seedPM(prisma, clientIds, adviserUser.id);
+  await seedPM(prisma, clientIds, adviserUser.id, { primary: wg1.id, secondary: wg2.id });
 
   // ── Stress Tests ──
   await seedStress(prisma, admin.id);

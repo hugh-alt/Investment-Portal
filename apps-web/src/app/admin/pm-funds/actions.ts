@@ -2,11 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireUser, isAdmin } from "@/lib/auth";
+import { requireUser, isAdmin, isSuperAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { validateMonotonicCumPct, type CurvePoint } from "@/lib/pm-curves";
 
-// ── Create PM Fund ──────────────────────────────────────
+// ── Create PM Fund (SUPER_ADMIN only) ───────────────────
 
 const createFundSchema = z.object({
   name: z.string().min(1, "Name is required").max(200),
@@ -22,7 +22,7 @@ export async function createFundAction(
   formData: FormData,
 ): Promise<CreateFundState> {
   const user = await requireUser();
-  if (!isAdmin(user)) return { error: "Admin access required" };
+  if (!isSuperAdmin(user)) return { error: "Super admin access required" };
 
   const parsed = createFundSchema.safeParse({
     name: formData.get("name"),
@@ -34,7 +34,7 @@ export async function createFundAction(
 
   const vintageYear = parsed.data.vintageYear ? parseInt(parsed.data.vintageYear, 10) : null;
 
-  const fund = await prisma.pMFund.create({
+  await prisma.pMFund.create({
     data: {
       name: parsed.data.name,
       vintageYear: vintageYear && !isNaN(vintageYear) ? vintageYear : null,
@@ -43,16 +43,11 @@ export async function createFundAction(
     },
   });
 
-  // Create default approval (not approved)
-  await prisma.pMFundApproval.create({
-    data: { fundId: fund.id, isApproved: false },
-  });
-
   revalidatePath("/admin/pm-funds");
   return { success: true };
 }
 
-// ── Toggle Approval ─────────────────────────────────────
+// ── Toggle Approval (scoped by wealth group) ────────────
 
 const toggleSchema = z.object({
   fundId: z.string().min(1),
@@ -75,18 +70,29 @@ export async function toggleApprovalAction(
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
   const isApproved = parsed.data.isApproved === "true";
+  const wealthGroupId = user.wealthGroupId;
 
-  await prisma.pMFundApproval.upsert({
-    where: { fundId: parsed.data.fundId },
-    update: { isApproved },
-    create: { fundId: parsed.data.fundId, isApproved },
+  // Upsert approval for this wealth group + fund combination
+  const existing = await prisma.pMFundApproval.findFirst({
+    where: { fundId: parsed.data.fundId, wealthGroupId },
   });
+
+  if (existing) {
+    await prisma.pMFundApproval.update({
+      where: { id: existing.id },
+      data: { isApproved },
+    });
+  } else {
+    await prisma.pMFundApproval.create({
+      data: { fundId: parsed.data.fundId, wealthGroupId, isApproved },
+    });
+  }
 
   revalidatePath("/admin/pm-funds");
   return {};
 }
 
-// ── Save Profile (% curves) ────────────────────────────
+// ── Save Profile (% curves) — SUPER_ADMIN only ─────────
 
 const profileSchema = z.object({
   fundId: z.string().min(1),
@@ -101,7 +107,7 @@ export async function saveProfileAction(
   formData: FormData,
 ): Promise<SaveProfileState> {
   const user = await requireUser();
-  if (!isAdmin(user)) return { error: "Admin access required" };
+  if (!isSuperAdmin(user)) return { error: "Super admin access required" };
 
   const parsed = profileSchema.safeParse({
     fundId: formData.get("fundId"),

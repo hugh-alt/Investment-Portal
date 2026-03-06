@@ -18,11 +18,13 @@ model WealthGroup {
   name      String
   createdAt DateTime @default(now())
 
-  users      User[]
-  advisers   Adviser[]
-  clients    Client[]
-  taxonomies Taxonomy[]
-  cmaSets    CMASet[]
+  users                    User[]
+  advisers                 Adviser[]
+  clients                  Client[]
+  taxonomies               Taxonomy[]
+  cmaSets                  CMASet[]
+  fundApprovals            PMFundApproval[]
+  taxonomyLiquidityDefaults TaxonomyLiquidityDefault[]
 }
 
 model User {
@@ -255,7 +257,7 @@ model TaxonomyNode {
   saaAllocations   SAAAllocation[]
   stressShocks     StressShock[]
   cmaAssumptions   CMAAssumption[]
-  liquidityDefault TaxonomyLiquidityDefault?
+  liquidityDefaults TaxonomyLiquidityDefault[]
 }
 
 // ── Private Markets ──────────────────────────────────────
@@ -285,7 +287,7 @@ model PMFund {
   fundTermMonths         Int?
   createdAt              DateTime       @default(now())
 
-  approval    PMFundApproval?
+  approvals   PMFundApproval[]
   profile     PMFundProfile?
   commitments ClientCommitment[]
 }
@@ -300,13 +302,17 @@ model PMFundProfile {
 }
 
 model PMFundApproval {
-  id         String   @id @default(cuid())
-  fundId     String   @unique
-  isApproved Boolean  @default(false)
-  notes      String?
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  fundId         String
+  wealthGroupId  String?
+  isApproved     Boolean  @default(false)
+  notes          String?
+  createdAt      DateTime @default(now())
 
-  fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  fund        PMFund       @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  wealthGroup WealthGroup? @relation(fields: [wealthGroupId], references: [id])
+
+  @@unique([wealthGroupId, fundId])
 }
 
 enum BufferMethod {
@@ -676,12 +682,16 @@ model LiquidityProfile {
 
 model TaxonomyLiquidityDefault {
   id                 String   @id @default(cuid())
-  taxonomyNodeId     String   @unique
+  taxonomyNodeId     String
   liquidityProfileId String
+  wealthGroupId      String?
   createdAt          DateTime @default(now())
 
-  node    TaxonomyNode     @relation(fields: [taxonomyNodeId], references: [id], onDelete: Cascade)
-  profile LiquidityProfile @relation(fields: [liquidityProfileId], references: [id], onDelete: Cascade)
+  node        TaxonomyNode     @relation(fields: [taxonomyNodeId], references: [id], onDelete: Cascade)
+  profile     LiquidityProfile @relation(fields: [liquidityProfileId], references: [id], onDelete: Cascade)
+  wealthGroup WealthGroup?     @relation(fields: [wealthGroupId], references: [id])
+
+  @@unique([taxonomyNodeId, wealthGroupId])
 }
 
 model ProductLiquidityOverride {

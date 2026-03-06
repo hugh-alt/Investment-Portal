@@ -33,7 +33,7 @@ const stageColor: Record<string, string> = {
   LIQUIDATING: "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400",
 };
 
-export function FundList({ funds }: { funds: FundRow[] }) {
+export function FundList({ funds, canEditProfile = true }: { funds: FundRow[]; canEditProfile?: boolean }) {
   if (funds.length === 0) {
     return <p className="mt-6 text-sm text-zinc-400">No PM funds yet.</p>;
   }
@@ -56,7 +56,7 @@ export function FundList({ funds }: { funds: FundRow[] }) {
         </thead>
         <tbody>
           {funds.map((f) => (
-            <FundRowComponent key={f.id} fund={f} />
+            <FundRowComponent key={f.id} fund={f} canEditProfile={canEditProfile} />
           ))}
         </tbody>
       </table>
@@ -64,7 +64,7 @@ export function FundList({ funds }: { funds: FundRow[] }) {
   );
 }
 
-function FundRowComponent({ fund }: { fund: FundRow }) {
+function FundRowComponent({ fund, canEditProfile }: { fund: FundRow; canEditProfile: boolean }) {
   const [, action, pending] = useActionState<ToggleApprovalState, FormData>(
     toggleApprovalAction,
     {},
@@ -130,12 +130,16 @@ function FundRowComponent({ fund }: { fund: FundRow }) {
         {fund.commitmentCount}
       </td>
       <td className="px-4 py-3 text-right">
-        <Link
-          href={`/admin/pm-funds/${fund.id}`}
-          className="text-sm text-zinc-600 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-200"
-        >
-          Edit profile
-        </Link>
+        {canEditProfile ? (
+          <Link
+            href={`/admin/pm-funds/${fund.id}`}
+            className="text-sm text-zinc-600 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-200"
+          >
+            Edit profile
+          </Link>
+        ) : (
+          <span className="text-xs text-zinc-400">Platform-managed</span>
+        )}
       </td>
     </tr>
   );

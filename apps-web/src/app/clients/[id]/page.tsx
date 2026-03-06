@@ -1205,9 +1205,20 @@ async function SleeveSection({ clientId }: { clientId: string }) {
     })),
   }));
 
-  // Approved funds for the commitment form
+  // Approved funds for the commitment form — scoped by wealth group
+  const sleeveClient = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { wealthGroupId: true },
+  });
   const approvedFunds = await prisma.pMFund.findMany({
-    where: { approval: { isApproved: true } },
+    where: {
+      approvals: {
+        some: {
+          isApproved: true,
+          ...(sleeveClient?.wealthGroupId ? { wealthGroupId: sleeveClient.wealthGroupId } : {}),
+        },
+      },
+    },
     select: { id: true, name: true, currency: true },
     orderBy: { name: "asc" },
   });

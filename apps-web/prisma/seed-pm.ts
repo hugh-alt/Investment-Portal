@@ -69,7 +69,12 @@ function distCurve(stage: LifecycleStage): { month: string; cumPct: number }[] {
   });
 }
 
-export async function seedPM(prisma: PrismaClient, clientIds: string[], adviserUserId?: string) {
+export async function seedPM(
+  prisma: PrismaClient,
+  clientIds: string[],
+  adviserUserId?: string,
+  wealthGroupIds?: { primary: string; secondary: string },
+) {
   // Clean existing PM data for idempotency
   await prisma.orderEvent.deleteMany({});
   await prisma.order.deleteMany({});
@@ -102,15 +107,35 @@ export async function seedPM(prisma: PrismaClient, clientIds: string[], adviserU
     });
   }
 
-  // Approve first 6, leave last 2 unapproved
+  // Wealth-group-scoped approvals
+  // Demo Advice Co: approve first 6 funds (AUD), leave USD funds unapproved
+  // Second Demo Group: approve only first 3 funds (different whitelist)
+  const wg1 = wealthGroupIds?.primary ?? null;
+  const wg2 = wealthGroupIds?.secondary ?? null;
+
   for (let i = 0; i < PM_FUNDS.length; i++) {
-    await prisma.pMFundApproval.create({
-      data: {
-        fundId: PM_FUNDS[i].id,
-        isApproved: i < 6,
-        notes: i < 6 ? "Approved by investment committee" : "Under review",
-      },
-    });
+    // Demo Advice Co approvals
+    if (wg1) {
+      await prisma.pMFundApproval.create({
+        data: {
+          fundId: PM_FUNDS[i].id,
+          wealthGroupId: wg1,
+          isApproved: i < 6,
+          notes: i < 6 ? "Approved by investment committee" : "Under review",
+        },
+      });
+    }
+    // Second Demo Group: only first 3 approved
+    if (wg2) {
+      await prisma.pMFundApproval.create({
+        data: {
+          fundId: PM_FUNDS[i].id,
+          wealthGroupId: wg2,
+          isApproved: i < 3,
+          notes: i < 3 ? "Approved" : "Not reviewed",
+        },
+      });
+    }
   }
 
   // Profiles for ALL funds with % curves

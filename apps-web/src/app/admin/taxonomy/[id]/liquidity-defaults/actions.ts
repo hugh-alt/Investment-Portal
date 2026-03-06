@@ -10,7 +10,7 @@ export async function setTaxonomyLiquidityDefaultAction(
   nodeId: string,
   formData: FormData,
 ) {
-  await requireRole(Role.ADMIN);
+  const user = await requireRole(Role.ADMIN);
 
   const tier = formData.get("tier") as string;
   const horizonDays = parseInt(formData.get("horizonDays") as string, 10);
@@ -20,7 +20,7 @@ export async function setTaxonomyLiquidityDefaultAction(
     return;
   }
 
-  // Upsert: find or create a matching profile, then set the default
+  // Create a matching profile, then set the default scoped to wealth group
   const profile = await prisma.liquidityProfile.create({
     data: {
       tier: tier as "LISTED" | "FUND_LIQUID" | "FUND_SEMI_LIQUID" | "PRIVATE" | "LOCKED",
@@ -29,11 +29,23 @@ export async function setTaxonomyLiquidityDefaultAction(
     },
   });
 
-  await prisma.taxonomyLiquidityDefault.upsert({
-    where: { taxonomyNodeId: nodeId },
-    update: { liquidityProfileId: profile.id },
-    create: { taxonomyNodeId: nodeId, liquidityProfileId: profile.id },
+  const wealthGroupId = user.wealthGroupId;
+
+  // Find existing default for this node + wealth group
+  const existing = await prisma.taxonomyLiquidityDefault.findFirst({
+    where: { taxonomyNodeId: nodeId, wealthGroupId },
   });
+
+  if (existing) {
+    await prisma.taxonomyLiquidityDefault.update({
+      where: { id: existing.id },
+      data: { liquidityProfileId: profile.id },
+    });
+  } else {
+    await prisma.taxonomyLiquidityDefault.create({
+      data: { taxonomyNodeId: nodeId, liquidityProfileId: profile.id, wealthGroupId },
+    });
+  }
 
   revalidatePath(`/admin/taxonomy/${taxonomyId}/liquidity-defaults`);
 }
@@ -42,10 +54,10 @@ export async function removeTaxonomyLiquidityDefaultAction(
   taxonomyId: string,
   nodeId: string,
 ) {
-  await requireRole(Role.ADMIN);
+  const user = await requireRole(Role.ADMIN);
 
   await prisma.taxonomyLiquidityDefault.deleteMany({
-    where: { taxonomyNodeId: nodeId },
+    where: { taxonomyNodeId: nodeId, wealthGroupId: user.wealthGroupId },
   });
 
   revalidatePath(`/admin/taxonomy/${taxonomyId}/liquidity-defaults`);

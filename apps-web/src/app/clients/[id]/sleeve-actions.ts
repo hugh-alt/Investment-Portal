@@ -194,11 +194,19 @@ export async function addCommitmentAction(
   const commitment = parseFloat(parsed.data.commitmentAmount);
   if (isNaN(commitment) || commitment <= 0) return { error: "Invalid commitment amount" };
 
-  // Verify fund is approved
-  const approval = await prisma.pMFundApproval.findUnique({
-    where: { fundId: parsed.data.fundId },
+  // Verify fund is approved for the client's wealth group
+  const client = await prisma.client.findUnique({
+    where: { id: parsed.data.clientId },
+    select: { wealthGroupId: true },
   });
-  if (!approval?.isApproved) return { error: "Fund is not approved" };
+  const approval = await prisma.pMFundApproval.findFirst({
+    where: {
+      fundId: parsed.data.fundId,
+      isApproved: true,
+      ...(client?.wealthGroupId ? { wealthGroupId: client.wealthGroupId } : {}),
+    },
+  });
+  if (!approval) return { error: "Fund is not approved for this wealth group" };
 
   await prisma.clientCommitment.create({
     data: {

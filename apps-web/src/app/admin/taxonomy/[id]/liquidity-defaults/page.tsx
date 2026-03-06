@@ -10,7 +10,7 @@ export default async function LiquidityDefaultsPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireRole(Role.ADMIN);
+  const user = await requireRole(Role.ADMIN);
   const { id } = await params;
 
   const taxonomy = await prisma.taxonomy.findUnique({
@@ -19,7 +19,10 @@ export default async function LiquidityDefaultsPage({
       nodes: {
         orderBy: { sortOrder: "asc" },
         include: {
-          liquidityDefault: { include: { profile: true } },
+          liquidityDefaults: {
+            where: user.wealthGroupId ? { wealthGroupId: user.wealthGroupId } : {},
+            include: { profile: true },
+          },
         },
       },
     },
@@ -28,23 +31,22 @@ export default async function LiquidityDefaultsPage({
   if (!taxonomy) notFound();
 
   // Build tree-like display: risk buckets → asset classes
-  const riskBuckets = taxonomy.nodes.filter(
-    (n) => n.nodeType === TaxonomyNodeType.RISK,
-  );
-
-  const nodeData = taxonomy.nodes.map((n) => ({
-    id: n.id,
-    name: n.name,
-    nodeType: n.nodeType,
-    parentId: n.parentId,
-    currentDefault: n.liquidityDefault
-      ? {
-          tier: n.liquidityDefault.profile.tier,
-          horizonDays: n.liquidityDefault.profile.horizonDays,
-          stressedHaircutPct: n.liquidityDefault.profile.stressedHaircutPct,
-        }
-      : null,
-  }));
+  const nodeData = taxonomy.nodes.map((n) => {
+    const ld = n.liquidityDefaults[0] ?? null;
+    return {
+      id: n.id,
+      name: n.name,
+      nodeType: n.nodeType,
+      parentId: n.parentId,
+      currentDefault: ld
+        ? {
+            tier: ld.profile.tier,
+            horizonDays: ld.profile.horizonDays,
+            stressedHaircutPct: ld.profile.stressedHaircutPct,
+          }
+        : null,
+    };
+  });
 
   return (
     <div>

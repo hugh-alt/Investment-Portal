@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireUser, isAdmin } from "@/lib/auth";
+import { requireUser, isAdmin, isSuperAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ApprovalToggle } from "./approval-toggle";
 import { ProfileEditor } from "./profile-editor";
@@ -22,13 +22,39 @@ export default async function FundDetailPage({
   if (!isAdmin(user)) notFound();
 
   const { id } = await params;
+  const userIsSuperAdmin = isSuperAdmin(user);
 
   const fund = await prisma.pMFund.findUnique({
     where: { id },
-    include: { approval: true, profile: true },
+    include: {
+      approvals: {
+        where: user.wealthGroupId ? { wealthGroupId: user.wealthGroupId } : undefined,
+      },
+      profile: true,
+    },
   });
 
   if (!fund) notFound();
+
+  // Only SUPER_ADMIN can access profile editing page
+  if (!userIsSuperAdmin) {
+    return (
+      <div>
+        <Link
+          href="/admin/pm-funds"
+          className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
+        >
+          &larr; All PM Funds
+        </Link>
+        <div className="mt-6">
+          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">{fund.name}</h1>
+          <p className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+            Fund profiles and % curves are platform-managed truth data. Contact Reach Alts to request changes.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   let callCurve: CurvePoint[] = [];
   let distCurve: CurvePoint[] = [];
@@ -107,11 +133,11 @@ export default async function FundDetailPage({
         </div>
         <ApprovalToggle
           fundId={fund.id}
-          isApproved={fund.approval?.isApproved ?? false}
+          isApproved={fund.approvals.some((a) => a.isApproved)}
         />
       </div>
 
-      {/* Profile editor */}
+      {/* Profile editor — SUPER_ADMIN only */}
       <div className="mt-8">
         <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
           Projected % Curves (% of commitment)
