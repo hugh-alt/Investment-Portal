@@ -1,9 +1,15 @@
 import { prisma } from "@/lib/prisma";
+import { requireUser, isSuperAdmin } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
 import { ScenarioListClient } from "./scenario-list";
 
 export default async function StressTestsPage() {
+  const user = await requireUser();
+  // Stress scenarios are created by users; scope by createdBy's wealthGroup
+  const wgFilter = isSuperAdmin(user) ? {} : { createdBy: { wealthGroupId: user.wealthGroupId } };
+
   const scenarios = await prisma.stressScenario.findMany({
+    where: wgFilter,
     include: {
       createdBy: { select: { name: true } },
       _count: { select: { shocks: true, runs: true } },

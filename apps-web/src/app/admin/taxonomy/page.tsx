@@ -1,8 +1,13 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { requireUser, wealthGroupFilter } from "@/lib/auth";
 
 export default async function TaxonomyListPage() {
+  const user = await requireUser();
+  const wgWhere = wealthGroupFilter(user);
+
   const taxonomies = await prisma.taxonomy.findMany({
+    where: wgWhere,
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { nodes: true } } },
   });

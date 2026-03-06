@@ -1,12 +1,25 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { requireUser, wealthGroupFilter } from "@/lib/auth";
 
 export default async function ClientsPage() {
+  const user = await requireUser();
   let clients: { id: string; name: string; createdAt: Date }[] = [];
   let error = false;
 
   try {
+    // Scope by wealth group; advisers also filtered to own clients
+    const wgFilter = wealthGroupFilter(user);
+    let where: Record<string, unknown> = {};
+    if (wgFilter) where = { ...where, ...wgFilter };
+    if (user.role === "ADVISER") {
+      const adviser = await prisma.adviser.findUnique({ where: { userId: user.id } });
+      if (adviser) where = { ...where, adviserId: adviser.id };
+      else where = { ...where, id: "__none__" };
+    }
+
     clients = await prisma.client.findMany({
+      where,
       orderBy: { createdAt: "desc" },
     });
   } catch {

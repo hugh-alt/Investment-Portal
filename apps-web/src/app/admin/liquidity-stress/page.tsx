@@ -1,10 +1,15 @@
 import { prisma } from "@/lib/prisma";
+import { requireUser, isSuperAdmin } from "@/lib/auth";
 import { LiquidityStressManager } from "./stress-manager";
 
 export default async function LiquidityStressPage() {
+  const user = await requireUser();
+  const wgFilter = isSuperAdmin(user) ? {} : { createdBy: { wealthGroupId: user.wealthGroupId } };
+
   let scenarios;
   try {
     scenarios = await prisma.liquidityStressScenario.findMany({
+    where: wgFilter,
     include: {
       rules: { orderBy: { horizonDays: "asc" } },
       runs: {

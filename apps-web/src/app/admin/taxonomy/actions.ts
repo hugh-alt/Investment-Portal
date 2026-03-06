@@ -40,6 +40,7 @@ export async function createTaxonomyAction(
     parsed.data.name,
     user.id,
     parsed.data.description,
+    user.wealthGroupId,
   );
   redirect(`/admin/taxonomy/${taxonomy.id}`);
 }

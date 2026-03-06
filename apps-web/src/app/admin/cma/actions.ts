@@ -33,6 +33,7 @@ export async function createCMASetAction(
       name: parsed.data.name,
       description: parsed.data.description || null,
       effectiveDate: parsed.data.effectiveDate ? new Date(parsed.data.effectiveDate) : null,
+      wealthGroupId: user.wealthGroupId,
       createdByUserId: user.id,
     },
   });

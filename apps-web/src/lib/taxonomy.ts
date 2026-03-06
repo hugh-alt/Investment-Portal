@@ -8,11 +8,13 @@ export async function createTaxonomyWithDefaults(
   name: string,
   userId: string,
   description?: string,
+  wealthGroupId?: string | null,
 ) {
   return prisma.taxonomy.create({
     data: {
       name,
       description,
+      wealthGroupId: wealthGroupId ?? null,
       createdByUserId: userId,
       nodes: {
         create: DEFAULT_NODES.map((n) => ({

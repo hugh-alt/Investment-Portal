@@ -13,13 +13,27 @@ enum Role {
   SUPER_ADMIN
 }
 
-model User {
+model WealthGroup {
   id        String   @id @default(cuid())
-  email     String   @unique
   name      String
-  role      Role
   createdAt DateTime @default(now())
 
+  users      User[]
+  advisers   Adviser[]
+  clients    Client[]
+  taxonomies Taxonomy[]
+  cmaSets    CMASet[]
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String
+  role           Role
+  wealthGroupId  String?
+  createdAt      DateTime @default(now())
+
+  wealthGroup                WealthGroup?            @relation(fields: [wealthGroupId], references: [id])
   adviser                    Adviser?
   taxonomies                 Taxonomy[]
   stressScenarios            StressScenario[]
@@ -30,23 +44,27 @@ model User {
 }
 
 model Adviser {
-  id        String   @id @default(cuid())
-  userId    String   @unique
-  firmName  String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  firmName       String
+  wealthGroupId  String?
+  createdAt      DateTime @default(now())
 
-  user    User     @relation(fields: [userId], references: [id])
-  clients Client[]
-  saas    SAA[]
+  user         User          @relation(fields: [userId], references: [id])
+  wealthGroup  WealthGroup?  @relation(fields: [wealthGroupId], references: [id])
+  clients      Client[]
+  saas         SAA[]
 }
 
 model Client {
-  id        String   @id @default(cuid())
-  adviserId String
-  name      String
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  adviserId      String
+  wealthGroupId  String?
+  name           String
+  createdAt      DateTime @default(now())
 
   adviser                Adviser              @relation(fields: [adviserId], references: [id])
+  wealthGroup            WealthGroup?         @relation(fields: [wealthGroupId], references: [id])
   accounts               Account[]
   clientSAA              ClientSAA?
   clientSleeve           ClientSleeve?
@@ -211,9 +229,11 @@ model Taxonomy {
   id              String         @id @default(cuid())
   name            String
   description     String?
+  wealthGroupId   String?
   createdAt       DateTime       @default(now())
   createdByUserId String
 
+  wealthGroup  WealthGroup?         @relation(fields: [wealthGroupId], references: [id])
   createdBy    User                 @relation(fields: [createdByUserId], references: [id])
   nodes        TaxonomyNode[]
   productMaps  ProductTaxonomyMap[]
@@ -590,10 +610,12 @@ model CMASet {
   isDefault       Boolean      @default(false)
   status          CMASetStatus @default(DRAFT)
   effectiveDate   DateTime?
+  wealthGroupId   String?
   createdByUserId String
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
+  wealthGroup      WealthGroup?         @relation(fields: [wealthGroupId], references: [id])
   createdBy        User                 @relation(fields: [createdByUserId], references: [id])
   assumptions      CMAAssumption[]
   clientSelections ClientCMASelection[]

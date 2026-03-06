@@ -29,8 +29,13 @@ import {
 } from "@/lib/liquidity-stress";
 
 export default async function GovernancePage() {
-  // Fetch all clients with adviser, accounts+holdings, SAA, sleeves
+  const { requireUser, wealthGroupFilter } = await import("@/lib/auth");
+  const user = await requireUser();
+  const wgWhere = wealthGroupFilter(user);
+
+  // Fetch clients scoped by wealth group
   const clients = await prisma.client.findMany({
+    where: wgWhere,
     include: {
       adviser: { include: { user: { select: { name: true } } } },
       accounts: {

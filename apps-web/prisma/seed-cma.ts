@@ -44,7 +44,7 @@ function buildAssumptionData(
   return data;
 }
 
-export async function seedCMA(prisma: PrismaClient, adminUserId: string) {
+export async function seedCMA(prisma: PrismaClient, adminUserId: string, wealthGroupId?: string) {
   // Clean up
   await prisma.clientCMASelection.deleteMany({});
   await prisma.cMAAssumption.deleteMany({});
@@ -80,6 +80,7 @@ export async function seedCMA(prisma: PrismaClient, adminUserId: string) {
       isDefault: true,
       status: CMASetStatus.ACTIVE,
       effectiveDate: new Date("2026-01-01"),
+      wealthGroupId: wealthGroupId ?? null,
       createdByUserId: adminUserId,
       assumptions: { create: buildAssumptionData(BASE_ASSUMPTIONS, nodeByKey) },
     },
@@ -93,6 +94,7 @@ export async function seedCMA(prisma: PrismaClient, adminUserId: string) {
       isDefault: false,
       status: CMASetStatus.ACTIVE,
       effectiveDate: new Date("2026-01-01"),
+      wealthGroupId: wealthGroupId ?? null,
       createdByUserId: adminUserId,
       assumptions: { create: buildAssumptionData(BULL_ASSUMPTIONS, nodeByKey) },
     },
@@ -106,6 +108,7 @@ export async function seedCMA(prisma: PrismaClient, adminUserId: string) {
       isDefault: false,
       status: CMASetStatus.RETIRED,
       effectiveDate: new Date("2025-01-01"),
+      wealthGroupId: wealthGroupId ?? null,
       createdByUserId: adminUserId,
       assumptions: { create: buildAssumptionData(RETIRED_ASSUMPTIONS, nodeByKey) },
     },

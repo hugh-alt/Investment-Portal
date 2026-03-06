@@ -24,61 +24,103 @@ const CLIENT_NAMES = [
 ];
 
 async function main() {
+  // ── Wealth Groups ──
+  const wg1 = await prisma.wealthGroup.upsert({
+    where: { id: "wg-demo-advice-co" },
+    update: {},
+    create: { id: "wg-demo-advice-co", name: "Demo Advice Co" },
+  });
+
+  const wg2 = await prisma.wealthGroup.upsert({
+    where: { id: "wg-second-demo" },
+    update: {},
+    create: { id: "wg-second-demo", name: "Second Demo Group" },
+  });
+
   // ── Demo users ──
 
-  // 1. SUPER_ADMIN — platform owner
+  // 1. SUPER_ADMIN — platform owner (no wealth group)
   const superAdmin = await prisma.user.upsert({
     where: { email: "superadmin@reachalts.com.au" },
-    update: { role: Role.SUPER_ADMIN },
+    update: { role: Role.SUPER_ADMIN, wealthGroupId: null },
     create: {
       email: "superadmin@reachalts.com.au",
       name: "Super Admin",
       role: Role.SUPER_ADMIN,
+      wealthGroupId: null,
     },
   });
 
-  // 2. ADMIN — wealth group admin
+  // 2. ADMIN — Demo Advice Co
   const admin = await prisma.user.upsert({
     where: { email: "admin@reachalts.com.au" },
-    update: { role: Role.ADMIN },
+    update: { role: Role.ADMIN, wealthGroupId: wg1.id },
     create: {
       email: "admin@reachalts.com.au",
       name: "Wealth Group Admin",
       role: Role.ADMIN,
+      wealthGroupId: wg1.id,
     },
   });
 
-  // 3. ADVISER — financial adviser
+  // 3. ADVISER — Demo Advice Co
   const adviserUser = await prisma.user.upsert({
     where: { email: "adviser@reachalts.com.au" },
-    update: { role: Role.ADVISER },
+    update: { role: Role.ADVISER, wealthGroupId: wg1.id },
     create: {
       email: "adviser@reachalts.com.au",
       name: "Demo Adviser",
       role: Role.ADVISER,
+      wealthGroupId: wg1.id,
     },
   });
 
-  // 4. ADMIN (dual-role demo) — has admin privileges + adviser profile
+  // 4. ADMIN (dual-role demo) — Demo Advice Co
   const adminAdviser = await prisma.user.upsert({
     where: { email: "adminadviser@reachalts.com.au" },
-    update: { role: Role.ADMIN },
+    update: { role: Role.ADMIN, wealthGroupId: wg1.id },
     create: {
       email: "adminadviser@reachalts.com.au",
       name: "Admin Adviser",
       role: Role.ADMIN,
+      wealthGroupId: wg1.id,
+    },
+  });
+
+  // 5. ADMIN for Second Demo Group
+  const admin2 = await prisma.user.upsert({
+    where: { email: "admin2@reachalts.com.au" },
+    update: { role: Role.ADMIN, wealthGroupId: wg2.id },
+    create: {
+      email: "admin2@reachalts.com.au",
+      name: "Second Group Admin",
+      role: Role.ADMIN,
+      wealthGroupId: wg2.id,
+    },
+  });
+
+  // 6. ADVISER for Second Demo Group
+  const adviser2User = await prisma.user.upsert({
+    where: { email: "adviser2@reachalts.com.au" },
+    update: { role: Role.ADVISER, wealthGroupId: wg2.id },
+    create: {
+      email: "adviser2@reachalts.com.au",
+      name: "Second Group Adviser",
+      role: Role.ADVISER,
+      wealthGroupId: wg2.id,
     },
   });
 
   // ── Adviser profiles ──
 
-  // Primary adviser (linked to clients)
+  // Primary adviser (Demo Advice Co)
   const adviser = await prisma.adviser.upsert({
     where: { userId: adviserUser.id },
-    update: {},
+    update: { wealthGroupId: wg1.id },
     create: {
       userId: adviserUser.id,
-      firmName: "ReachAlts Advisory",
+      firmName: "Demo Advice Co",
+      wealthGroupId: wg1.id,
     },
   });
 
@@ -91,7 +133,6 @@ async function main() {
     });
     const oldAdviser = await prisma.adviser.findUnique({ where: { userId: oldUser.id } });
     if (oldAdviser) {
-      // Reassign clients to the new adviser, then remove old adviser + SAAs
       await prisma.client.updateMany({
         where: { adviserId: oldAdviser.id },
         data: { adviserId: adviser.id },
@@ -105,31 +146,55 @@ async function main() {
     await prisma.user.delete({ where: { id: oldUser.id } });
   }
 
-  // Admin-adviser also gets an adviser profile for demo
-  const adviserForAdmin = await prisma.adviser.upsert({
+  // Admin-adviser also gets an adviser profile (Demo Advice Co)
+  await prisma.adviser.upsert({
     where: { userId: adminAdviser.id },
-    update: {},
+    update: { wealthGroupId: wg1.id },
     create: {
       userId: adminAdviser.id,
-      firmName: "ReachAlts Advisory",
+      firmName: "Demo Advice Co",
+      wealthGroupId: wg1.id,
     },
   });
 
-  // ── Clients (linked to the primary adviser) ──
+  // Adviser for Second Demo Group
+  const adviser2 = await prisma.adviser.upsert({
+    where: { userId: adviser2User.id },
+    update: { wealthGroupId: wg2.id },
+    create: {
+      userId: adviser2User.id,
+      firmName: "Second Demo Group",
+      wealthGroupId: wg2.id,
+    },
+  });
 
+  // ── Clients (Demo Advice Co) ──
   for (const name of CLIENT_NAMES) {
     await prisma.client.upsert({
       where: { id: `seed-${name.toLowerCase().replace(/\s/g, "-")}` },
-      update: { adviserId: adviser.id },
+      update: { adviserId: adviser.id, wealthGroupId: wg1.id },
       create: {
         id: `seed-${name.toLowerCase().replace(/\s/g, "-")}`,
         adviserId: adviser.id,
+        wealthGroupId: wg1.id,
         name,
       },
     });
   }
 
-  // ── Default Taxonomy ──
+  // ── Client for Second Demo Group ──
+  await prisma.client.upsert({
+    where: { id: "seed-frank-second" },
+    update: { adviserId: adviser2.id, wealthGroupId: wg2.id },
+    create: {
+      id: "seed-frank-second",
+      adviserId: adviser2.id,
+      wealthGroupId: wg2.id,
+      name: "Frank Thompson",
+    },
+  });
+
+  // ── Default Taxonomy (scoped to Demo Advice Co) ──
   const existingTaxonomy = await prisma.taxonomy.findFirst({
     where: { name: "Default SAA Taxonomy" },
   });
@@ -138,6 +203,7 @@ async function main() {
       data: {
         name: "Default SAA Taxonomy",
         description: "Standard risk-bucket classification",
+        wealthGroupId: wg1.id,
         createdByUserId: superAdmin.id,
         nodes: {
           create: [
@@ -146,6 +212,11 @@ async function main() {
           ],
         },
       },
+    });
+  } else if (!existingTaxonomy.wealthGroupId) {
+    await prisma.taxonomy.update({
+      where: { id: existingTaxonomy.id },
+      data: { wealthGroupId: wg1.id },
     });
   }
 
@@ -167,8 +238,8 @@ async function main() {
   // ── Stress Tests ──
   await seedStress(prisma, admin.id);
 
-  // ── CMA ──
-  await seedCMA(prisma, admin.id);
+  // ── CMA (scoped to Demo Advice Co) ──
+  await seedCMA(prisma, admin.id, wg1.id);
 
   // ── Rebalance (CLIENT_APPROVED plan for demo) ──
   await seedRebalance(prisma, clientIds[0], adviserUser.id);
@@ -179,12 +250,19 @@ async function main() {
   // ── Liquidity Stress Scenarios ──
   await seedLiquidityStress(prisma, admin.id);
 
-  console.log("Seeded 4 demo users:");
-  console.log("  SUPER_ADMIN : superadmin@reachalts.com.au");
-  console.log("  ADMIN       : admin@reachalts.com.au");
-  console.log("  ADVISER     : adviser@reachalts.com.au");
-  console.log("  ADMIN+Adviser: adminadviser@reachalts.com.au");
-  console.log("Plus 5 clients, taxonomy, holdings, mappings, SAAs, PM funds + sleeves, stress tests, CMA, rebalance, liquidity profiles");
+  console.log("Seeded 2 wealth groups:");
+  console.log("  Demo Advice Co    (primary)");
+  console.log("  Second Demo Group (secondary)");
+  console.log("");
+  console.log("Seeded 6 demo users:");
+  console.log("  SUPER_ADMIN  : superadmin@reachalts.com.au  (no group - platform-wide)");
+  console.log("  ADMIN        : admin@reachalts.com.au       (Demo Advice Co)");
+  console.log("  ADVISER      : adviser@reachalts.com.au     (Demo Advice Co)");
+  console.log("  ADMIN+Adviser: adminadviser@reachalts.com.au (Demo Advice Co)");
+  console.log("  ADMIN        : admin2@reachalts.com.au      (Second Demo Group)");
+  console.log("  ADVISER      : adviser2@reachalts.com.au    (Second Demo Group)");
+  console.log("");
+  console.log("Plus 5 clients (Demo Advice Co), 1 client (Second Demo Group), taxonomy, holdings, mappings, SAAs, PM funds + sleeves, stress tests, CMA, rebalance, liquidity profiles");
 }
 
 main()

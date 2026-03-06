@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireUser, isAdmin } from "@/lib/auth";
+import { requireUser, isAdmin, isSuperAdmin } from "@/lib/auth";
 import { logoutAction } from "./actions";
 
 const ADMIN_LINKS = [
@@ -12,6 +12,11 @@ const ADMIN_LINKS = [
   { href: "/admin/governance", label: "Governance" },
 ];
 
+const SUPER_ADMIN_LINKS = [
+  ...ADMIN_LINKS,
+  { href: "/platform/wealth-groups", label: "Wealth Groups" },
+];
+
 const ADVISER_LINKS = [
   { href: "/clients", label: "Clients" },
   { href: "/adviser/saa", label: "Strategic Asset Allocation" },
@@ -21,7 +26,7 @@ const ADVISER_LINKS = [
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const links = isAdmin(user) ? ADMIN_LINKS : ADVISER_LINKS;
+  const links = isSuperAdmin(user) ? SUPER_ADMIN_LINKS : isAdmin(user) ? ADMIN_LINKS : ADVISER_LINKS;
 
   return (
     <div className="min-h-screen bg-zinc-50 p-8 font-sans dark:bg-black">

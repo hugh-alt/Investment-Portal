@@ -91,3 +91,27 @@ export async function requireSuperAdmin(): Promise<User> {
   }
   return user;
 }
+
+// ── Wealth Group scoping helpers ────────────────────────
+
+/**
+ * Get the wealthGroupId for the current user.
+ * Returns null for SUPER_ADMIN (platform-wide access).
+ * Returns the user's wealthGroupId for ADMIN/ADVISER.
+ */
+export async function getCurrentWealthGroupId(): Promise<string | null> {
+  const user = await requireUser();
+  if (isSuperAdmin(user)) return null;
+  return user.wealthGroupId;
+}
+
+/**
+ * Build a Prisma `where` clause for wealth group scoping.
+ * SUPER_ADMIN: no filter (returns undefined).
+ * ADMIN/ADVISER: filters by wealthGroupId.
+ */
+export function wealthGroupFilter(user: { role: string; wealthGroupId: string | null }): { wealthGroupId: string } | undefined {
+  if (user.role === "SUPER_ADMIN") return undefined;
+  if (!user.wealthGroupId) return { wealthGroupId: "__none__" }; // no group = no data
+  return { wealthGroupId: user.wealthGroupId };
+}

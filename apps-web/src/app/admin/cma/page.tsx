@@ -1,8 +1,13 @@
 import { prisma } from "@/lib/prisma";
+import { requireUser, wealthGroupFilter } from "@/lib/auth";
 import { CMAListClient } from "./cma-list";
 
 export default async function CmaPage() {
+  const user = await requireUser();
+  const wgWhere = wealthGroupFilter(user);
+
   const cmaSets = await prisma.cMASet.findMany({
+    where: wgWhere,
     include: {
       createdBy: { select: { name: true } },
       _count: { select: { assumptions: true } },

@@ -74,31 +74,24 @@ export default async function ClientDetailPage({
 
   if (!client) notFound();
 
-  // Adviser can only view their own clients
+  // Wealth group scoping: ADMIN/ADVISER can only view clients in their group
+  const notAuthorised = (
+    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
+      <div className="max-w-sm text-center">
+        <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Not authorised</h1>
+        <p className="mt-2 text-sm text-zinc-500">You can only view your own clients.</p>
+        <Link href="/clients" className="mt-4 inline-block text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100">&larr; Back to clients</Link>
+      </div>
+    </div>
+  );
+
+  if (user.role !== "SUPER_ADMIN" && user.wealthGroupId && client.wealthGroupId !== user.wealthGroupId) {
+    return notAuthorised;
+  }
+
   if (user.role === "ADVISER") {
-    const adviser = await prisma.adviser.findUnique({
-      where: { userId: user.id },
-    });
-    if (!adviser || client.adviserId !== adviser.id) {
-      return (
-        <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-          <div className="max-w-sm text-center">
-            <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-              Not authorised
-            </h1>
-            <p className="mt-2 text-sm text-zinc-500">
-              You can only view your own clients.
-            </p>
-            <Link
-              href="/clients"
-              className="mt-4 inline-block text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100"
-            >
-              &larr; Back to clients
-            </Link>
-          </div>
-        </div>
-      );
-    }
+    const adviser = await prisma.adviser.findUnique({ where: { userId: user.id } });
+    if (!adviser || client.adviserId !== adviser.id) return notAuthorised;
   }
 
   const totalValue = client.accounts.reduce(
