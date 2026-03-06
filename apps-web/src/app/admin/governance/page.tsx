@@ -23,6 +23,10 @@ import {
   type TaxonomyNode as LPTaxNode,
   type ExposureInput,
 } from "@/lib/liquidity-profile";
+import {
+  buildLiquidityStressGovRows,
+  type LiquidityStressGovRow,
+} from "@/lib/liquidity-stress";
 
 export default async function GovernancePage() {
   // Fetch all clients with adviser, accounts+holdings, SAA, sleeves
@@ -395,6 +399,75 @@ export default async function GovernancePage() {
   const liquidityRiskRows = buildClientLiquidityRiskRows(liquidityRiskInputs)
     .sort((a, b) => a.pctLiquid30d - b.pctLiquid30d); // lowest 30d first
 
+  // ── Liquidity Stress (latest run of default scenario) ──
+  let liquidityStressRows: LiquidityStressGovRow[] = [];
+  let liquidityStressAvailable = true;
+  try {
+    const defaultStressScenario = await prisma.liquidityStressScenario.findFirst({
+      where: { isDefault: true },
+    });
+    if (defaultStressScenario) {
+      const latestRun = await prisma.liquidityStressRun.findFirst({
+        where: { scenarioId: defaultStressScenario.id },
+        orderBy: { runAt: "desc" },
+        include: { results: true },
+      });
+      if (latestRun) {
+        // Group results by client
+        const resultsByClient = new Map<string, typeof latestRun.results>();
+        for (const r of latestRun.results) {
+          const list = resultsByClient.get(r.clientId) ?? [];
+          list.push(r);
+          resultsByClient.set(r.clientId, list);
+        }
+
+        const stressInputs = clients.map((c) => {
+          const results = resultsByClient.get(c.id) ?? [];
+          const h30 = results.find((r) => r.horizonDays === 30);
+          const h90 = results.find((r) => r.horizonDays === 90);
+          const h365 = results.find((r) => r.horizonDays === 365);
+
+          const getStatus = (coverage: number): "OK" | "WARN" | "CRITICAL" =>
+            coverage >= 1 ? "OK" : coverage >= 0.8 ? "WARN" : "CRITICAL";
+
+          const horizons = [h30, h90, h365].filter(Boolean).map((h) => ({
+            horizonDays: h!.horizonDays,
+            availableLiquidity: h!.availableLiquidity,
+            requiredLiquidity: h!.requiredLiquidity,
+            coverageRatio: h!.coverageRatio,
+            shortfall: h!.shortfall,
+            status: getStatus(h!.coverageRatio),
+            details: { stressedLiquidityByHorizon: 0, pmCallsWithinHorizon: 0, bufferRequirement: 0, extraDemandPct: 0, extraDemandAmount: 0, foreignCurrencyCalls: [] },
+          }));
+
+          const statuses = horizons.map((h) => h.status);
+          const worstStatus: "OK" | "WARN" | "CRITICAL" =
+            statuses.includes("CRITICAL") ? "CRITICAL" :
+            statuses.includes("WARN") ? "WARN" : "OK";
+
+          return {
+            clientId: c.id,
+            clientName: c.name,
+            adviserName: c.adviser.user.name,
+            adviserId: c.adviserId,
+            stress: {
+              clientId: c.id,
+              totalPortfolioValue: 0,
+              horizons,
+              worstStatus,
+              worstCoverage30d: h30?.coverageRatio ?? 999,
+              worstCoverage90d: h90?.coverageRatio ?? 999,
+            },
+          };
+        });
+
+        liquidityStressRows = buildLiquidityStressGovRows(stressInputs);
+      }
+    }
+  } catch {
+    liquidityStressAvailable = false;
+  }
+
   // Build adviser list for filter dropdown
   const adviserMap = new Map<string, string>();
   for (const c of clients) {
@@ -420,6 +493,8 @@ export default async function GovernancePage() {
           sleeveRows={sleeveRows}
           rebalanceRows={rebalanceRows}
           liquidityRiskRows={liquidityRiskRows}
+          liquidityStressRows={liquidityStressRows}
+          liquidityStressAvailable={liquidityStressAvailable}
           advisers={advisers}
         />
       </div>

@@ -20,11 +20,13 @@ model User {
   role      Role
   createdAt DateTime @default(now())
 
-  adviser          Adviser?
-  taxonomies       Taxonomy[]
-  stressScenarios  StressScenario[]
-  stressRuns       StressRun[]
-  cmaSets          CMASet[]
+  adviser                    Adviser?
+  taxonomies                 Taxonomy[]
+  stressScenarios            StressScenario[]
+  stressRuns                 StressRun[]
+  cmaSets                    CMASet[]
+  liquidityStressScenarios   LiquidityStressScenario[]
+  liquidityStressRuns        LiquidityStressRun[]
 }
 
 model Adviser {
@@ -44,14 +46,15 @@ model Client {
   name      String
   createdAt DateTime @default(now())
 
-  adviser        Adviser              @relation(fields: [adviserId], references: [id])
-  accounts       Account[]
-  clientSAA      ClientSAA?
-  clientSleeve   ClientSleeve?
-  orders         Order[]
-  stressResults  StressResult[]
-  rebalancePlans RebalancePlan[]
-  cmaSelection   ClientCMASelection?
+  adviser                Adviser              @relation(fields: [adviserId], references: [id])
+  accounts               Account[]
+  clientSAA              ClientSAA?
+  clientSleeve           ClientSleeve?
+  orders                 Order[]
+  stressResults          StressResult[]
+  rebalancePlans         RebalancePlan[]
+  cmaSelection           ClientCMASelection?
+  liquidityStressResults LiquidityStressResult[]
 }
 
 // ── Platform / Holdings ─────────────────────────────────
@@ -668,4 +671,59 @@ model ProductLiquidityOverride {
 
   product Product          @relation(fields: [productId], references: [id])
   profile LiquidityProfile @relation(fields: [liquidityProfileId], references: [id], onDelete: Cascade)
+}
+
+// ── Liquidity Stress Testing ────────────────────────────
+
+model LiquidityStressScenario {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  isDefault       Boolean  @default(false)
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  createdBy User                    @relation(fields: [createdByUserId], references: [id])
+  rules     LiquidityStressRule[]
+  runs      LiquidityStressRun[]
+}
+
+model LiquidityStressRule {
+  id                     String @id @default(cuid())
+  scenarioId             String
+  horizonDays            Int    // 30, 90, 365
+  extraCashDemandPct     Float  @default(0) // 0–1
+  extraCashDemandAmount  Float  @default(0) // absolute $
+
+  scenario LiquidityStressScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+
+  @@unique([scenarioId, horizonDays])
+}
+
+model LiquidityStressRun {
+  id         String   @id @default(cuid())
+  scenarioId String
+  runByUserId String
+  runAt      DateTime @default(now())
+
+  scenario LiquidityStressScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  runBy    User                    @relation(fields: [runByUserId], references: [id])
+  results  LiquidityStressResult[]
+}
+
+model LiquidityStressResult {
+  id                 String @id @default(cuid())
+  runId              String
+  clientId           String
+  horizonDays        Int
+  availableLiquidity Float
+  requiredLiquidity  Float
+  coverageRatio      Float
+  shortfall          Float
+  detailsJson        String @default("{}")
+
+  run    LiquidityStressRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  client Client             @relation(fields: [clientId], references: [id])
+
+  @@index([runId, clientId])
 }

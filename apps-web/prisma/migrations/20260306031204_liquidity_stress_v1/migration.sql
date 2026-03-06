@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "CMASet" ALTER COLUMN "updatedAt" DROP DEFAULT;

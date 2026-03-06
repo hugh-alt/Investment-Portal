@@ -10,6 +10,7 @@ import { seedStress } from "./seed-stress";
 import { seedCMA } from "./seed-cma";
 import { seedRebalance } from "./seed-rebalance";
 import { seedLiquidityProfiles } from "./seed-liquidity-profiles";
+import { seedLiquidityStress } from "./seed-liquidity-stress";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
@@ -174,6 +175,9 @@ async function main() {
 
   // ── Liquidity Profiles ──
   await seedLiquidityProfiles(prisma);
+
+  // ── Liquidity Stress Scenarios ──
+  await seedLiquidityStress(prisma, admin.id);
 
   console.log("Seeded 4 demo users:");
   console.log("  SUPER_ADMIN : superadmin@reachalts.com.au");

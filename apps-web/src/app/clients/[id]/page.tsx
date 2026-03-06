@@ -41,6 +41,7 @@ import {
   type ExposureInput,
 } from "@/lib/liquidity-profile";
 import { LiquidityLadderView } from "./liquidity-ladder-view";
+import { LiquidityStressView } from "./liquidity-stress-view";
 
 export default async function ClientDetailPage({
   params,
@@ -144,6 +145,7 @@ export default async function ClientDetailPage({
 
             <AllocationSection accounts={client.accounts} clientId={id} />
             <LiquidityLadderSection accounts={client.accounts} clientId={id} />
+            <LiquidityStressSection clientId={id} />
             <SAASection clientId={id} accounts={client.accounts} />
             <ExpectedOutcomesSection clientId={id} accounts={client.accounts} />
             <RebalanceSection clientId={id} />
@@ -393,6 +395,85 @@ async function LiquidityLadderSection({
           assumedCount={ladder.assumedCount}
           gatedCount={ladder.gatedCount}
           exposures={ladder.exposures}
+        />
+      </div>
+    </div>
+  );
+}
+
+async function LiquidityStressSection({ clientId }: { clientId: string }) {
+  let defaultScenario: { id: string; name: string } | null = null;
+  try {
+    defaultScenario = await prisma.liquidityStressScenario.findFirst({
+      where: { isDefault: true },
+      select: { id: true, name: true },
+    });
+  } catch {
+    return null; // table doesn't exist yet — migration not applied
+  }
+
+  if (!defaultScenario) return null;
+
+  // Find the latest run for this scenario
+  const latestRun = await prisma.liquidityStressRun.findFirst({
+    where: { scenarioId: defaultScenario.id },
+    orderBy: { runAt: "desc" },
+    select: {
+      id: true,
+      results: {
+        where: { clientId },
+        select: {
+          horizonDays: true,
+          availableLiquidity: true,
+          requiredLiquidity: true,
+          coverageRatio: true,
+          shortfall: true,
+          detailsJson: true,
+        },
+        orderBy: { horizonDays: "asc" },
+      },
+    },
+  });
+
+  if (!latestRun || latestRun.results.length === 0) return null;
+
+  const horizons = latestRun.results.map((r) => {
+    let details = {
+      pmCallsWithinHorizon: 0,
+      bufferRequirement: 0,
+      extraDemandPct: 0,
+      extraDemandAmount: 0,
+      foreignCurrencyCalls: [] as { currency: string; amount: number }[],
+    };
+    try {
+      details = { ...details, ...JSON.parse(r.detailsJson) };
+    } catch { /* empty */ }
+
+    return {
+      horizonDays: r.horizonDays,
+      availableLiquidity: r.availableLiquidity,
+      requiredLiquidity: r.requiredLiquidity,
+      coverageRatio: r.coverageRatio,
+      shortfall: r.shortfall,
+      status: r.coverageRatio >= 1 ? "OK" : r.coverageRatio >= 0.8 ? "WARN" : "CRITICAL",
+      details,
+    };
+  });
+
+  const hasForeignCurrency = horizons.some(
+    (h) => h.details.foreignCurrencyCalls.length > 0,
+  );
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+        Liquidity Stress
+      </h2>
+      <div className="mt-3">
+        <LiquidityStressView
+          scenarioName={defaultScenario.name}
+          horizons={horizons}
+          hasForeignCurrency={hasForeignCurrency}
         />
       </div>
     </div>

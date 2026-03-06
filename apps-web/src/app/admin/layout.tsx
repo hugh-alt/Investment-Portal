@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/admin/stress-tests", label: "Stress Tests" },
   { href: "/admin/pm-funds", label: "Approved PM Funds" },
   { href: "/admin/products", label: "Products" },
+  { href: "/admin/liquidity-stress", label: "Liquidity Stress" },
   { href: "/admin/governance", label: "Governance" },
 ];
 

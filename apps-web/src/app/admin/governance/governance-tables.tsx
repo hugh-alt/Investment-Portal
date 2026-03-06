@@ -9,6 +9,7 @@ import type {
   GovernanceSummary,
 } from "@/lib/governance";
 import type { ClientLiquidityRiskRow } from "@/lib/liquidity-profile";
+import type { LiquidityStressGovRow } from "@/lib/liquidity-stress";
 import { formatDate } from "@/lib/format";
 
 const pct = (v: number) => (v * 100).toFixed(1) + "%";
@@ -54,6 +55,8 @@ export function GovernanceDashboard({
   sleeveRows,
   rebalanceRows,
   liquidityRiskRows,
+  liquidityStressRows,
+  liquidityStressAvailable = true,
   advisers,
 }: {
   summary: GovernanceSummary;
@@ -61,6 +64,8 @@ export function GovernanceDashboard({
   sleeveRows: SleeveGovernanceRow[];
   rebalanceRows: RebalanceGovernanceRow[];
   liquidityRiskRows: ClientLiquidityRiskRow[];
+  liquidityStressRows: LiquidityStressGovRow[];
+  liquidityStressAvailable?: boolean;
   advisers: { id: string; name: string }[];
 }) {
   const [adviserFilter, setAdviserFilter] = useState("ALL");
@@ -95,6 +100,11 @@ export function GovernanceDashboard({
   });
 
   const filteredLiquidityRisk = liquidityRiskRows.filter((r) => {
+    if (adviserFilter !== "ALL" && r.adviserId !== adviserFilter) return false;
+    return true;
+  });
+
+  const filteredLiquidityStress = liquidityStressRows.filter((r) => {
     if (adviserFilter !== "ALL" && r.adviserId !== adviserFilter) return false;
     return true;
   });
@@ -353,6 +363,89 @@ export function GovernanceDashboard({
           </tbody>
         </table>
       </div>
+
+      {/* Liquidity Stress table */}
+      {!liquidityStressAvailable && (
+        <div className="mt-8">
+          <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">Liquidity Stress</h2>
+          <p className="mt-2 text-sm text-yellow-600 dark:text-yellow-400">
+            Liquidity stress not available — run the migration and <code>npx prisma generate</code>, then restart the server.
+          </p>
+        </div>
+      )}
+      {liquidityStressAvailable && filteredLiquidityStress.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+                Liquidity Stress
+              </h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                Coverage of cash demands (PM calls + buffer + scenario shocks), sorted by worst 30d coverage.
+              </p>
+            </div>
+            <Link
+              href="/admin/liquidity-stress"
+              className="text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100"
+            >
+              Manage scenarios
+            </Link>
+          </div>
+          <table className="mt-3 w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                <th className="pb-2 font-medium text-zinc-500">Client</th>
+                <th className="pb-2 font-medium text-zinc-500">Adviser</th>
+                <th className="pb-2 font-medium text-zinc-500">30d</th>
+                <th className="pb-2 text-right font-medium text-zinc-500">Coverage</th>
+                <th className="pb-2 text-right font-medium text-zinc-500">Shortfall</th>
+                <th className="pb-2 font-medium text-zinc-500">90d</th>
+                <th className="pb-2 text-right font-medium text-zinc-500">Coverage</th>
+                <th className="pb-2 text-right font-medium text-zinc-500">Shortfall</th>
+                <th className="pb-2 font-medium text-zinc-500"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredLiquidityStress.map((r) => (
+                <tr key={r.clientId} className="border-b border-zinc-100 dark:border-zinc-800">
+                  <td className="py-2 text-zinc-900 dark:text-zinc-100">{r.clientName}</td>
+                  <td className="py-2 text-zinc-600 dark:text-zinc-400">{r.adviserName}</td>
+                  <td className="py-2">
+                    <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${SEVERITY_COLORS[r.status30d]}`}>
+                      {r.status30d}
+                    </span>
+                  </td>
+                  <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
+                    {r.coverage30d >= 999 ? "n/a" : (r.coverage30d * 100).toFixed(0) + "%"}
+                  </td>
+                  <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
+                    {r.shortfall30d > 0 ? fmt(r.shortfall30d) : "—"}
+                  </td>
+                  <td className="py-2">
+                    <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${SEVERITY_COLORS[r.status90d]}`}>
+                      {r.status90d}
+                    </span>
+                  </td>
+                  <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
+                    {r.coverage90d >= 999 ? "n/a" : (r.coverage90d * 100).toFixed(0) + "%"}
+                  </td>
+                  <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
+                    {r.shortfall90d > 0 ? fmt(r.shortfall90d) : "—"}
+                  </td>
+                  <td className="py-2 text-right">
+                    <Link
+                      href={`/clients/${r.clientId}`}
+                      className="text-sm font-medium text-zinc-900 hover:underline dark:text-zinc-100"
+                    >
+                      View
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Liquidity Risk table */}
       <div className="mt-8">
