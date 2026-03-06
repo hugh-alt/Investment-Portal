@@ -31,7 +31,8 @@ import { SAASelector } from "./saa-selector";
 import { DriftView } from "./drift-view";
 import { CreateSleeveForm, SleeveSummary } from "./sleeve-view";
 import { RebalanceGenerateButton, RebalancePlanCard } from "./rebalance-view";
-import { computeExpectedOutcomes, type CMAInput, type WeightInput, type CMAResult } from "@/lib/cma";
+import { computeExpectedOutcomes, type CMAInput, type WeightInput } from "@/lib/cma";
+import { ExpectedOutcomesView } from "./expected-outcomes-view";
 import {
   buildLiquidityLadder,
   type LiquidityProfileData,
@@ -565,8 +566,6 @@ async function SAASection({
   );
 }
 
-const pctFmt = (v: number) => (v * 100).toFixed(1) + "%";
-
 async function ExpectedOutcomesSection({
   clientId,
   accounts,
@@ -586,15 +585,30 @@ async function ExpectedOutcomesSection({
     }[];
   }[];
 }) {
-  // Find the default CMA set
-  const defaultCMA = await prisma.cMASet.findFirst({
-    where: { isDefault: true },
+  // Get all ACTIVE CMA sets for the dropdown
+  const activeCmaSets = await prisma.cMASet.findMany({
+    where: { status: "ACTIVE" },
     include: { assumptions: true },
+    orderBy: { name: "asc" },
   });
 
-  if (!defaultCMA) return null;
+  if (activeCmaSets.length === 0) return null;
 
-  const cmaInputs: CMAInput[] = defaultCMA.assumptions.map((a) => ({
+  // Get client's CMA selection (if any)
+  const clientCMASelection = await prisma.clientCMASelection.findUnique({
+    where: { clientId },
+  });
+
+  // Resolve which CMA set to use: client selection → firm default
+  const defaultCMA = activeCmaSets.find((s) => s.isDefault);
+  const selectedCMA = clientCMASelection
+    ? activeCmaSets.find((s) => s.id === clientCMASelection.cmaSetId)
+    : null;
+  const effectiveCMA = selectedCMA ?? defaultCMA;
+
+  if (!effectiveCMA) return null;
+
+  const cmaInputs: CMAInput[] = effectiveCMA.assumptions.map((a) => ({
     nodeId: a.taxonomyNodeId,
     expReturnPct: a.expReturnPct,
     volPct: a.volPct,
@@ -688,7 +702,7 @@ async function ExpectedOutcomesSection({
   const portfolioResult = computeExpectedOutcomes(currentWeights, cmaInputs);
 
   // Compute SAA expected outcomes if assigned
-  let saaResult: CMAResult | null = null;
+  let saaResult = null;
   let saaName: string | null = null;
 
   const clientSAA = await prisma.clientSAA.findUnique({
@@ -700,9 +714,10 @@ async function ExpectedOutcomesSection({
     },
   });
 
+  let saaWeights: WeightInput[] = [];
   if (clientSAA?.saa) {
     saaName = clientSAA.saa.name;
-    const saaWeights: WeightInput[] = clientSAA.saa.allocations.map((a) => ({
+    saaWeights = clientSAA.saa.allocations.map((a) => ({
       nodeId: a.nodeId,
       nodeName: a.node.name,
       weight: a.targetWeight,
@@ -710,114 +725,46 @@ async function ExpectedOutcomesSection({
     saaResult = computeExpectedOutcomes(saaWeights, cmaInputs);
   }
 
+  // Compare with firm default (if client has a non-default selection)
+  let compareResult = null;
+  let compareSaaResult = null;
+  const compareCmaSetName = defaultCMA?.name ?? null;
+
+  if (selectedCMA && defaultCMA && selectedCMA.id !== defaultCMA.id) {
+    const defaultInputs: CMAInput[] = defaultCMA.assumptions.map((a) => ({
+      nodeId: a.taxonomyNodeId,
+      expReturnPct: a.expReturnPct,
+      volPct: a.volPct,
+    }));
+    compareResult = computeExpectedOutcomes(currentWeights, defaultInputs);
+    if (saaWeights.length > 0) {
+      compareSaaResult = computeExpectedOutcomes(saaWeights, defaultInputs);
+    }
+  }
+
   return (
     <div className="mt-8">
       <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
         Expected Outcomes
       </h2>
-      <p className="mt-1 text-xs text-zinc-400">
-        Based on: {defaultCMA.name}
-      </p>
 
-      <div className={`mt-3 grid gap-4 ${saaResult ? "grid-cols-2" : "grid-cols-1"}`}>
-        {/* Current portfolio */}
-        <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Current Portfolio
-          </h3>
-          <div className="mt-3 flex gap-6">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Exp. Return</p>
-              <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                {pctFmt(portfolioResult.expectedReturnPct)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Risk (vol)</p>
-              <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                {pctFmt(portfolioResult.riskProxyPct)}
-              </p>
-            </div>
-          </div>
-          {portfolioResult.missingCoveragePct > 0.005 && (
-            <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
-              Missing CMA coverage: {pctFmt(portfolioResult.missingCoveragePct)} of portfolio
-            </p>
-          )}
-          <table className="mt-3 w-full text-xs">
-            <thead>
-              <tr className="text-zinc-400">
-                <th className="pb-1 text-left font-medium">Node</th>
-                <th className="pb-1 text-right font-medium">Weight</th>
-                <th className="pb-1 text-right font-medium">Return</th>
-                <th className="pb-1 text-right font-medium">Vol</th>
-              </tr>
-            </thead>
-            <tbody>
-              {portfolioResult.details.map((d) => (
-                <tr key={d.nodeId}>
-                  <td className={`py-0.5 ${d.hasCMA ? "text-zinc-700 dark:text-zinc-300" : "text-zinc-400 italic"}`}>
-                    {d.nodeName}{!d.hasCMA && " *"}
-                  </td>
-                  <td className="py-0.5 text-right text-zinc-500">{pctFmt(d.weight)}</td>
-                  <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.expReturnPct) : "—"}</td>
-                  <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.volPct) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* SAA target */}
-        {saaResult && (
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-            <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              SAA: {saaName}
-            </h3>
-            <div className="mt-3 flex gap-6">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Exp. Return</p>
-                <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                  {pctFmt(saaResult.expectedReturnPct)}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Risk (vol)</p>
-                <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                  {pctFmt(saaResult.riskProxyPct)}
-                </p>
-              </div>
-            </div>
-            {saaResult.missingCoveragePct > 0.005 && (
-              <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
-                Missing CMA coverage: {pctFmt(saaResult.missingCoveragePct)} of SAA
-              </p>
-            )}
-            <table className="mt-3 w-full text-xs">
-              <thead>
-                <tr className="text-zinc-400">
-                  <th className="pb-1 text-left font-medium">Node</th>
-                  <th className="pb-1 text-right font-medium">Target</th>
-                  <th className="pb-1 text-right font-medium">Return</th>
-                  <th className="pb-1 text-right font-medium">Vol</th>
-                </tr>
-              </thead>
-              <tbody>
-                {saaResult.details.map((d) => (
-                  <tr key={d.nodeId}>
-                    <td className={`py-0.5 ${d.hasCMA ? "text-zinc-700 dark:text-zinc-300" : "text-zinc-400 italic"}`}>
-                      {d.nodeName}{!d.hasCMA && " *"}
-                    </td>
-                    <td className="py-0.5 text-right text-zinc-500">{pctFmt(d.weight)}</td>
-                    <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.expReturnPct) : "—"}</td>
-                    <td className="py-0.5 text-right text-zinc-500">{d.hasCMA ? pctFmt(d.volPct) : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      <ExpectedOutcomesView
+        clientId={clientId}
+        selectedCmaSetId={clientCMASelection?.cmaSetId ?? null}
+        activeCmaSets={activeCmaSets.map((s) => ({
+          id: s.id,
+          name: s.name,
+          status: s.status,
+          isDefault: s.isDefault,
+        }))}
+        portfolioResult={portfolioResult}
+        saaResult={saaResult}
+        saaName={saaName}
+        cmaSetName={effectiveCMA.name}
+        compareResult={compareResult}
+        compareCmaSetName={compareCmaSetName}
+        compareSaaResult={compareSaaResult}
+      />
     </div>
   );
 }

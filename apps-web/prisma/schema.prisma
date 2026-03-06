@@ -44,13 +44,14 @@ model Client {
   name      String
   createdAt DateTime @default(now())
 
-  adviser        Adviser        @relation(fields: [adviserId], references: [id])
+  adviser        Adviser              @relation(fields: [adviserId], references: [id])
   accounts       Account[]
   clientSAA      ClientSAA?
   clientSleeve   ClientSleeve?
   orders         Order[]
   stressResults  StressResult[]
   rebalancePlans RebalancePlan[]
+  cmaSelection   ClientCMASelection?
 }
 
 // ── Platform / Holdings ─────────────────────────────────
@@ -573,16 +574,26 @@ model RebalanceApprovalEvent {
 
 // ── Capital Market Assumptions ──────────────────────────
 
+enum CMASetStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
 model CMASet {
-  id              String   @id @default(cuid())
+  id              String       @id @default(cuid())
   name            String
   description     String?
-  isDefault       Boolean  @default(false)
+  isDefault       Boolean      @default(false)
+  status          CMASetStatus @default(DRAFT)
+  effectiveDate   DateTime?
   createdByUserId String
-  createdAt       DateTime @default(now())
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
-  createdBy   User            @relation(fields: [createdByUserId], references: [id])
-  assumptions CMAAssumption[]
+  createdBy        User                 @relation(fields: [createdByUserId], references: [id])
+  assumptions      CMAAssumption[]
+  clientSelections ClientCMASelection[]
 }
 
 model CMAAssumption {
@@ -596,6 +607,16 @@ model CMAAssumption {
   node   TaxonomyNode @relation(fields: [taxonomyNodeId], references: [id])
 
   @@unique([cmaSetId, taxonomyNodeId])
+}
+
+model ClientCMASelection {
+  id        String   @id @default(cuid())
+  clientId  String   @unique
+  cmaSetId  String
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  cmaSet CMASet @relation(fields: [cmaSetId], references: [id])
 }
 
 // ── Liquidity Profiles ──────────────────────────────────

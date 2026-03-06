@@ -74,6 +74,12 @@ export default async function CMASetPage({
     };
   });
 
+  const STATUS_LABELS: Record<string, string> = {
+    DRAFT: "Draft",
+    ACTIVE: "Active",
+    RETIRED: "Retired",
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
@@ -82,11 +88,22 @@ export default async function CMASetPage({
       {cmaSet.description && (
         <p className="mt-1 text-sm text-zinc-500">{cmaSet.description}</p>
       )}
-      {cmaSet.isDefault && (
-        <span className="mt-2 inline-block rounded bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900 dark:text-green-300">
-          Firm default
+      <div className="mt-2 flex items-center gap-2">
+        <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${
+          cmaSet.status === "ACTIVE"
+            ? "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300"
+            : cmaSet.status === "RETIRED"
+              ? "bg-orange-50 text-orange-700 dark:bg-orange-900 dark:text-orange-300"
+              : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+        }`}>
+          {STATUS_LABELS[cmaSet.status] ?? cmaSet.status}
         </span>
-      )}
+        {cmaSet.isDefault && (
+          <span className="rounded bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900 dark:text-green-300">
+            Firm default
+          </span>
+        )}
+      </div>
 
       <CMASetEditor
         cmaSetId={cmaSet.id}

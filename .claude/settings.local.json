@@ -15,7 +15,8 @@
       "Bash(npx tsc:*)",
       "Bash(PGPASSWORD=postgres psql:*)",
       "Bash(docker exec:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(curl:*)"
     ]
   }
 }

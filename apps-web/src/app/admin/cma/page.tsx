@@ -15,6 +15,8 @@ export default async function CmaPage() {
     name: s.name,
     description: s.description,
     isDefault: s.isDefault,
+    status: s.status,
+    effectiveDate: s.effectiveDate?.toISOString() ?? null,
     createdBy: s.createdBy.name,
     assumptionCount: s._count.assumptions,
   }));

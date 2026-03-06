@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 const createSetSchema = z.object({
   name: z.string().min(1),
   description: z.string().nullable().optional(),
+  effectiveDate: z.string().nullable().optional(),
 });
 
 export async function createCMASetAction(
@@ -21,6 +22,7 @@ export async function createCMASetAction(
   const parsed = createSetSchema.safeParse({
     name: formData.get("name"),
     description: formData.get("description"),
+    effectiveDate: formData.get("effectiveDate"),
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message };
@@ -30,6 +32,7 @@ export async function createCMASetAction(
     data: {
       name: parsed.data.name,
       description: parsed.data.description || null,
+      effectiveDate: parsed.data.effectiveDate ? new Date(parsed.data.effectiveDate) : null,
       createdByUserId: user.id,
     },
   });
@@ -85,12 +88,16 @@ export async function deleteAssumptionAction(cmaSetId: string, assumptionId: str
   revalidatePath(`/admin/cma/${cmaSetId}`);
 }
 
-// ── Set as default ──
+// ── Set as default (only ACTIVE sets) ──
 
 export async function setDefaultCMASetAction(cmaSetId: string) {
   await requireRole("ADMIN");
 
-  // Unset all other defaults, then set this one
+  const target = await prisma.cMASet.findUnique({ where: { id: cmaSetId } });
+  if (!target || target.status !== "ACTIVE") {
+    return;
+  }
+
   await prisma.cMASet.updateMany({
     where: { isDefault: true },
     data: { isDefault: false },
@@ -104,10 +111,44 @@ export async function setDefaultCMASetAction(cmaSetId: string) {
   revalidatePath(`/admin/cma/${cmaSetId}`);
 }
 
+// ── Update status ──
+
+const validStatuses = ["DRAFT", "ACTIVE", "RETIRED"] as const;
+
+export async function updateCMASetStatusAction(cmaSetId: string, status: string) {
+  await requireRole("ADMIN");
+
+  if (!validStatuses.includes(status as typeof validStatuses[number])) return;
+
+  // If retiring the default, unset default
+  const current = await prisma.cMASet.findUnique({ where: { id: cmaSetId } });
+  if (!current) return;
+
+  const updates: Record<string, unknown> = { status };
+
+  if (status === "RETIRED" && current.isDefault) {
+    updates.isDefault = false;
+  }
+  // If moving away from ACTIVE and it was default, unset default
+  if (status !== "ACTIVE" && current.isDefault) {
+    updates.isDefault = false;
+  }
+
+  await prisma.cMASet.update({
+    where: { id: cmaSetId },
+    data: updates,
+  });
+
+  revalidatePath("/admin/cma");
+  revalidatePath(`/admin/cma/${cmaSetId}`);
+}
+
 // ── Delete CMA set ──
 
 export async function deleteCMASetAction(cmaSetId: string) {
   await requireRole("ADMIN");
+  // Remove any client selections pointing to this set first
+  await prisma.clientCMASelection.deleteMany({ where: { cmaSetId } });
   await prisma.cMASet.delete({ where: { id: cmaSetId } });
   redirect("/admin/cma");
 }
