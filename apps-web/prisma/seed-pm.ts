@@ -1,5 +1,5 @@
 import { PrismaClient } from "../src/generated/prisma/client";
-import { PMFundStatus, LifecycleStage, BufferMethod, ApprovalStatus, RecommendationKind, RecommendationAction, ApprovalAction } from "../src/generated/prisma/enums";
+import { PMFundStatus, LifecycleStage, BufferMethod, ApprovalStatus, RecommendationKind, RecommendationAction, ApprovalAction, PMTemplateStatus, CashflowEventType } from "../src/generated/prisma/enums";
 
 const PM_FUNDS = [
   { id: "pmf-infra", name: "Macquarie Infrastructure Fund V", vintageYear: 2023, strategy: "Infrastructure", currency: "AUD", status: PMFundStatus.OPEN, lifecycleStage: LifecycleStage.INVESTING, firstCloseDate: new Date("2023-03-15"), investmentPeriodMonths: 48, fundTermMonths: 120 },
@@ -76,6 +76,9 @@ export async function seedPM(
   wealthGroupIds?: { primary: string; secondary: string },
 ) {
   // Clean existing PM data for idempotency
+  await prisma.clientCommitmentScenario.deleteMany({});
+  await prisma.clientFundNAVPoint.deleteMany({});
+  await prisma.clientFundCashflowEvent.deleteMany({});
   await prisma.orderEvent.deleteMany({});
   await prisma.order.deleteMany({});
   await prisma.approvalEvent.deleteMany({});
@@ -85,8 +88,10 @@ export async function seedPM(
   await prisma.sleeveLiquidPosition.deleteMany({});
   await prisma.clientCommitment.deleteMany({});
   await prisma.clientSleeve.deleteMany({});
+  await prisma.pMFundTruth.deleteMany({});
   await prisma.pMFundProfile.deleteMany({});
   await prisma.pMFundApproval.deleteMany({});
+  await prisma.pMProjectionTemplate.deleteMany({});
   await prisma.pMFund.deleteMany({});
 
   // Create funds
@@ -336,5 +341,112 @@ export async function seedPM(
     });
   }
 
-  console.log("Created 8 PM funds with lifecycle stages + % curves, 2 client sleeves with waterfall configs, 1 CLIENT_APPROVED recommendation");
+  // ── Projection Templates (Fast/Base/Slow) ──
+  const baseCalls = Array.from({ length: 12 }, (_, i) => ({
+    month: monthsAhead(i + 1),
+    cumPct: Math.min(0.80, (i + 1) * 0.07),
+  }));
+  const baseDists = Array.from({ length: 12 }, (_, i) => ({
+    month: monthsAhead(i + 1),
+    cumPct: i < 6 ? 0 : Math.min(0.10, (i - 5) * 0.02),
+  }));
+
+  const fastCalls = baseCalls.map((p) => ({ ...p, cumPct: Math.min(1.0, p.cumPct * 1.4) }));
+  const fastDists = baseDists.map((p) => ({ ...p, cumPct: Math.min(1.0, p.cumPct * 0.5) }));
+  const slowCalls = baseCalls.map((p) => ({ ...p, cumPct: p.cumPct * 0.5 }));
+  const slowDists = baseDists.map((p) => ({ ...p, cumPct: Math.min(1.0, p.cumPct * 2.0) }));
+
+  const tmplBase = await prisma.pMProjectionTemplate.create({
+    data: {
+      id: "tmpl-base",
+      name: "Base",
+      description: "Base-case call/distribution pace",
+      callCurvePctJson: JSON.stringify(baseCalls),
+      distCurvePctJson: JSON.stringify(baseDists),
+      status: PMTemplateStatus.ACTIVE,
+    },
+  });
+  const tmplFast = await prisma.pMProjectionTemplate.create({
+    data: {
+      id: "tmpl-fast",
+      name: "Fast",
+      description: "Accelerated capital deployment scenario",
+      callCurvePctJson: JSON.stringify(fastCalls),
+      distCurvePctJson: JSON.stringify(fastDists),
+      status: PMTemplateStatus.ACTIVE,
+    },
+  });
+  const tmplSlow = await prisma.pMProjectionTemplate.create({
+    data: {
+      id: "tmpl-slow",
+      name: "Slow",
+      description: "Delayed deployment / extended harvesting",
+      callCurvePctJson: JSON.stringify(slowCalls),
+      distCurvePctJson: JSON.stringify(slowDists),
+      status: PMTemplateStatus.ACTIVE,
+    },
+  });
+
+  // ── Fund Truth records (link default template per fund) ──
+  for (const f of PM_FUNDS) {
+    await prisma.pMFundTruth.create({
+      data: {
+        fundId: f.id,
+        defaultTemplateId: tmplBase.id,
+        lifecycleStage: f.lifecycleStage,
+        firstCloseDate: f.firstCloseDate,
+        investmentPeriodMonths: f.investmentPeriodMonths,
+        fundTermMonths: f.fundTermMonths,
+      },
+    });
+  }
+
+  // ── Cashflow Events + NAV Points for Alice's infra commitment ──
+  // Find Alice's commitments (sleeve1)
+  const aliceCommitments = await prisma.clientCommitment.findMany({
+    where: { clientSleeveId: sleeve1.id },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (aliceCommitments.length > 0) {
+    const infraCommitment = aliceCommitments[0]; // pmf-infra
+
+    // 3 call events
+    await prisma.clientFundCashflowEvent.createMany({
+      data: [
+        { clientCommitmentId: infraCommitment.id, type: CashflowEventType.CALL, eventDate: new Date("2023-06-15"), amount: 75000, currency: "AUD" },
+        { clientCommitmentId: infraCommitment.id, type: CashflowEventType.CALL, eventDate: new Date("2024-01-15"), amount: 75000, currency: "AUD" },
+        { clientCommitmentId: infraCommitment.id, type: CashflowEventType.CALL, eventDate: new Date("2024-09-15"), amount: 50000, currency: "AUD" },
+      ],
+    });
+
+    // 2 distribution events
+    await prisma.clientFundCashflowEvent.createMany({
+      data: [
+        { clientCommitmentId: infraCommitment.id, type: CashflowEventType.DISTRIBUTION, eventDate: new Date("2025-06-30"), amount: 5000, currency: "AUD" },
+        { clientCommitmentId: infraCommitment.id, type: CashflowEventType.DISTRIBUTION, eventDate: new Date("2025-12-31"), amount: 5000, currency: "AUD" },
+      ],
+    });
+
+    // 4 NAV points (quarterly)
+    await prisma.clientFundNAVPoint.createMany({
+      data: [
+        { clientCommitmentId: infraCommitment.id, date: new Date("2025-06-30"), navAmount: 195000, currency: "AUD" },
+        { clientCommitmentId: infraCommitment.id, date: new Date("2025-09-30"), navAmount: 205000, currency: "AUD" },
+        { clientCommitmentId: infraCommitment.id, date: new Date("2025-12-31"), navAmount: 215000, currency: "AUD" },
+        { clientCommitmentId: infraCommitment.id, date: new Date("2026-02-28"), navAmount: 220000, currency: "AUD" },
+      ],
+    });
+
+    // Adviser overrides infra commitment to use "Fast" template
+    await prisma.clientCommitmentScenario.create({
+      data: {
+        clientCommitmentId: infraCommitment.id,
+        selectedTemplateId: tmplFast.id,
+        note: "Adviser expects accelerated deployment based on pipeline",
+      },
+    });
+  }
+
+  console.log("Created 8 PM funds, 3 projection templates (Fast/Base/Slow), fund truth records, cashflow events, NAV points, scenario override, 2 client sleeves, 1 CLIENT_APPROVED recommendation");
 }

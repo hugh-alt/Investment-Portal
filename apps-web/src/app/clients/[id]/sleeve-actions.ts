@@ -223,6 +223,46 @@ export async function addCommitmentAction(
   return { success: true };
 }
 
+// ── Set Commitment Modelling Scenario ───────────────────
+
+const setScenarioSchema = z.object({
+  clientId: z.string().min(1),
+  commitmentId: z.string().min(1),
+  templateId: z.string().min(1, "Select a template"),
+  note: z.string().nullable().optional(),
+});
+
+export async function setCommitmentScenarioAction(
+  _prev: SleeveFormState,
+  formData: FormData,
+): Promise<SleeveFormState> {
+  await requireUser();
+
+  const parsed = setScenarioSchema.safeParse({
+    clientId: formData.get("clientId"),
+    commitmentId: formData.get("commitmentId"),
+    templateId: formData.get("templateId"),
+    note: formData.get("note"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  await prisma.clientCommitmentScenario.upsert({
+    where: { clientCommitmentId: parsed.data.commitmentId },
+    update: {
+      selectedTemplateId: parsed.data.templateId,
+      note: parsed.data.note || null,
+    },
+    create: {
+      clientCommitmentId: parsed.data.commitmentId,
+      selectedTemplateId: parsed.data.templateId,
+      note: parsed.data.note || null,
+    },
+  });
+
+  revalidatePath(`/clients/${parsed.data.clientId}`);
+  return { success: true };
+}
+
 // ── Add Liquid Position ─────────────────────────────────
 
 const addLiquidSchema = z.object({

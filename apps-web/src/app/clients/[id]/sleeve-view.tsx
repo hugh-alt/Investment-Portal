@@ -14,6 +14,7 @@ import {
   createOrdersAction,
   simulateSubmitAction,
   simulateFillsAction,
+  setCommitmentScenarioAction,
   type SleeveFormState,
 } from "./sleeve-actions";
 import { statusLabel, nextStepLabel } from "@/lib/approval";
@@ -39,6 +40,13 @@ type CommitmentDetail = {
   metrics: { unfunded: number; pctCalled: number; dpi: number | null; rvpi: number | null; tvpi: number | null };
   projectedCalls: { month: string; amount: number }[];
   projectedDistributions: { month: string; amount: number }[];
+  commitmentId?: string;
+  eventCount?: number;
+  navPointCount?: number;
+  snapshotSource?: string;
+  templateName?: string;
+  templateSource?: string;
+  scenarioTemplateId?: string | null;
 };
 
 // ── Create Sleeve Form ──────────────────────────────────
@@ -168,6 +176,7 @@ export function SleeveSummary({
   buyWaterfall,
   minTradeAmount,
   recommendations,
+  projectionTemplates,
 }: {
   sleeveName: string;
   targetPct: number | null;
@@ -188,6 +197,7 @@ export function SleeveSummary({
   buyWaterfall: BuyWaterfallEntry[];
   minTradeAmount: number;
   recommendations: PersistedRecommendation[];
+  projectionTemplates?: { id: string; name: string }[];
 }) {
   const [expandedFund, setExpandedFund] = useState<string | null>(null);
 
@@ -243,6 +253,8 @@ export function SleeveSummary({
                     detail={c}
                     isExpanded={expandedFund === c.fundId}
                     onToggle={() => setExpandedFund(expandedFund === c.fundId ? null : c.fundId)}
+                    clientId={clientId}
+                    templates={projectionTemplates}
                   />
                 ))}
               </tbody>
@@ -326,22 +338,37 @@ function CommitmentRow({
   detail,
   isExpanded,
   onToggle,
+  clientId,
+  templates,
 }: {
   detail: CommitmentDetail;
   isExpanded: boolean;
   onToggle: () => void;
+  clientId: string;
+  templates?: { id: string; name: string }[];
 }) {
   const { metrics } = detail;
   const hasProjections = detail.projectedCalls.length > 0 || detail.projectedDistributions.length > 0;
+  const hasEvents = (detail.eventCount ?? 0) > 0 || (detail.navPointCount ?? 0) > 0;
 
   return (
     <>
       <tr className="border-b border-zinc-100 last:border-0 dark:border-zinc-800">
         <td className="px-3 py-2">
           <div className="text-zinc-900 dark:text-zinc-100">{detail.fundName}</div>
-          {detail.latestNavDate && (
-            <div className="text-[10px] text-zinc-400">NAV as at {detail.latestNavDate}</div>
-          )}
+          <div className="flex items-center gap-2">
+            {detail.latestNavDate && (
+              <span className="text-[10px] text-zinc-400">NAV as at {detail.latestNavDate}</span>
+            )}
+            {detail.snapshotSource === "events" && (
+              <span className="rounded bg-blue-50 px-1 py-0.5 text-[10px] text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">from events</span>
+            )}
+            {detail.templateName && (
+              <span className="rounded bg-purple-50 px-1 py-0.5 text-[10px] text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                {detail.templateName}{detail.templateSource === "scenario_override" ? " (override)" : ""}
+              </span>
+            )}
+          </div>
         </td>
         <td className="px-3 py-2 text-center">
           <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-900 dark:text-blue-200">
@@ -357,20 +384,36 @@ function CommitmentRow({
         <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">{ratio(metrics.dpi)}</td>
         <td className="px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">{ratio(metrics.tvpi)}</td>
         <td className="px-3 py-2 text-center">
-          {hasProjections && (
-            <button
-              onClick={onToggle}
-              className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-            >
-              {isExpanded ? "Hide" : "Proj."}
-            </button>
-          )}
+          <button
+            onClick={onToggle}
+            className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+          >
+            {isExpanded ? "Hide" : (hasProjections || hasEvents) ? "Detail" : ""}
+          </button>
         </td>
       </tr>
-      {isExpanded && hasProjections && (
+      {isExpanded && (
         <tr>
           <td colSpan={11} className="bg-zinc-50 px-3 py-3 dark:bg-zinc-900/50">
-            <ProjectionsPanel detail={detail} />
+            <div className="space-y-3">
+              {/* Scenario Selector */}
+              {detail.commitmentId && templates && templates.length > 0 && (
+                <ScenarioSelector
+                  clientId={clientId}
+                  commitmentId={detail.commitmentId}
+                  currentTemplateId={detail.scenarioTemplateId ?? undefined}
+                  templates={templates}
+                />
+              )}
+              {/* Event Info */}
+              {hasEvents && (
+                <div className="text-xs text-zinc-500">
+                  Data source: {detail.eventCount} cashflow event{detail.eventCount === 1 ? "" : "s"}, {detail.navPointCount} NAV point{detail.navPointCount === 1 ? "" : "s"}
+                </div>
+              )}
+              {/* Projections */}
+              {hasProjections && <ProjectionsPanel detail={detail} />}
+            </div>
           </td>
         </tr>
       )}
@@ -420,6 +463,56 @@ function ProjectionsPanel({ detail }: { detail: CommitmentDetail }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ── Scenario Selector ───────────────────────────────────
+
+function ScenarioSelector({
+  clientId,
+  commitmentId,
+  currentTemplateId,
+  templates,
+}: {
+  clientId: string;
+  commitmentId: string;
+  currentTemplateId?: string;
+  templates: { id: string; name: string }[];
+}) {
+  const [state, action, pending] = useActionState<SleeveFormState, FormData>(
+    setCommitmentScenarioAction,
+    {},
+  );
+
+  return (
+    <div className="rounded border border-zinc-200 p-2 dark:border-zinc-700">
+      <p className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+        Modelling scenario <span className="text-zinc-400">(does not change fund truth)</span>
+      </p>
+      <form action={action} className="flex items-center gap-2">
+        <input type="hidden" name="clientId" value={clientId} />
+        <input type="hidden" name="commitmentId" value={commitmentId} />
+        <select
+          name="templateId"
+          defaultValue={currentTemplateId ?? ""}
+          className="rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+        >
+          <option value="" disabled>Select template...</option>
+          {templates.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          disabled={pending}
+          className="rounded bg-zinc-900 px-2 py-1 text-xs text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          {pending ? "..." : "Apply"}
+        </button>
+        {state.error && <span className="text-xs text-red-600">{state.error}</span>}
+        {state.success && <span className="text-xs text-green-600">Updated</span>}
+      </form>
     </div>
   );
 }

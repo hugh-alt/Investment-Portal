@@ -274,6 +274,45 @@ enum LifecycleStage {
   LIQUIDATING
 }
 
+enum PMTemplateStatus {
+  ACTIVE
+  RETIRED
+}
+
+enum CashflowEventType {
+  CALL
+  DISTRIBUTION
+}
+
+model PMProjectionTemplate {
+  id                 String             @id @default(cuid())
+  name               String
+  description        String?
+  currency           String?
+  paramsJson         String             @default("{}")
+  callCurvePctJson   String             // JSON: cumulative % by month (0..1)
+  distCurvePctJson   String             // JSON: cumulative % by month (0..1)
+  status             PMTemplateStatus   @default(ACTIVE)
+  createdAt          DateTime           @default(now())
+
+  fundTruths              PMFundTruth[]
+  commitmentScenarios     ClientCommitmentScenario[]
+}
+
+model PMFundTruth {
+  id                     String          @id @default(cuid())
+  fundId                 String          @unique
+  defaultTemplateId      String?
+  lifecycleStage         LifecycleStage?
+  firstCloseDate         DateTime?
+  investmentPeriodMonths Int?
+  fundTermMonths         Int?
+  updatedAt              DateTime        @updatedAt
+
+  fund             PMFund                @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  defaultTemplate  PMProjectionTemplate? @relation(fields: [defaultTemplateId], references: [id])
+}
+
 model PMFund {
   id                     String         @id @default(cuid())
   name                   String
@@ -289,6 +328,7 @@ model PMFund {
 
   approvals   PMFundApproval[]
   profile     PMFundProfile?
+  truth       PMFundTruth?
   commitments ClientCommitment[]
 }
 
@@ -483,6 +523,48 @@ model ClientCommitment {
 
   sleeve ClientSleeve @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
   fund   PMFund       @relation(fields: [fundId], references: [id])
+
+  cashflowEvents ClientFundCashflowEvent[]
+  navPoints      ClientFundNAVPoint[]
+  scenario       ClientCommitmentScenario?
+}
+
+model ClientFundCashflowEvent {
+  id                 String            @id @default(cuid())
+  clientCommitmentId String
+  type               CashflowEventType
+  eventDate          DateTime
+  amount             Float
+  currency           String            @default("AUD")
+  createdAt          DateTime          @default(now())
+
+  commitment ClientCommitment @relation(fields: [clientCommitmentId], references: [id], onDelete: Cascade)
+
+  @@index([clientCommitmentId, eventDate])
+}
+
+model ClientFundNAVPoint {
+  id                 String   @id @default(cuid())
+  clientCommitmentId String
+  date               DateTime
+  navAmount          Float
+  currency           String   @default("AUD")
+  createdAt          DateTime @default(now())
+
+  commitment ClientCommitment @relation(fields: [clientCommitmentId], references: [id], onDelete: Cascade)
+
+  @@index([clientCommitmentId, date])
+}
+
+model ClientCommitmentScenario {
+  id                 String   @id @default(cuid())
+  clientCommitmentId String   @unique
+  selectedTemplateId String
+  note               String?
+  updatedAt          DateTime @updatedAt
+
+  commitment       ClientCommitment     @relation(fields: [clientCommitmentId], references: [id], onDelete: Cascade)
+  selectedTemplate PMProjectionTemplate @relation(fields: [selectedTemplateId], references: [id])
 }
 
 model SleeveLiquidPosition {

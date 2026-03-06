@@ -15,6 +15,7 @@ const ADMIN_LINKS = [
 const SUPER_ADMIN_LINKS = [
   ...ADMIN_LINKS,
   { href: "/platform/wealth-groups", label: "Wealth Groups" },
+  { href: "/platform/pm-templates", label: "PM Projection Templates" },
 ];
 
 const ADVISER_LINKS = [

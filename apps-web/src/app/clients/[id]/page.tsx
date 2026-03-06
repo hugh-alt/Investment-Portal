@@ -6,7 +6,8 @@ import { MappingScope, SAAScope, TaxonomyNodeType } from "@/generated/prisma/enu
 import { computeAllocation, type HoldingInput, type MappingInput } from "@/lib/allocation";
 import { computeDrift, type CurrentWeightInput, type TargetInput } from "@/lib/drift";
 import { computeSleeveTotals, groupByCurrency, type CommitmentInput } from "@/lib/sleeve";
-import { curveCumToIncremental, scaleIncrementalPctToDollars, computeFundMetrics, type CurvePoint } from "@/lib/pm-curves";
+import { computeFundMetrics, type CurvePoint } from "@/lib/pm-curves";
+import { computeSnapshotFromEvents, selectTemplate, computeProjections } from "@/lib/pm-lifecycle";
 import {
   computeRequiredVsUnfunded,
   computeRequiredVsProjectedCalls,
@@ -952,6 +953,13 @@ type CommitmentDetail = {
   metrics: { unfunded: number; pctCalled: number; dpi: number | null; rvpi: number | null; tvpi: number | null };
   projectedCalls: { month: string; amount: number }[];
   projectedDistributions: { month: string; amount: number }[];
+  commitmentId?: string;
+  eventCount?: number;
+  navPointCount?: number;
+  snapshotSource?: string;
+  templateName?: string;
+  templateSource?: string;
+  scenarioTemplateId?: string | null;
 };
 
 async function SleeveSection({ clientId }: { clientId: string }) {
@@ -961,7 +969,19 @@ async function SleeveSection({ clientId }: { clientId: string }) {
       commitments: {
         include: {
           fund: {
-            select: { name: true, currency: true, profile: true },
+            select: {
+              name: true,
+              currency: true,
+              profile: true,
+              truth: {
+                include: { defaultTemplate: { select: { id: true, name: true, callCurvePctJson: true, distCurvePctJson: true } } },
+              },
+            },
+          },
+          cashflowEvents: { orderBy: { eventDate: "asc" } },
+          navPoints: { orderBy: { date: "asc" } },
+          scenario: {
+            include: { selectedTemplate: { select: { id: true, name: true, callCurvePctJson: true, distCurvePctJson: true } } },
           },
         },
       },
@@ -982,50 +1002,101 @@ async function SleeveSection({ clientId }: { clientId: string }) {
     );
   }
 
-  const commitmentInputs: CommitmentInput[] = sleeve.commitments.map((c) => ({
-    fundId: c.fundId,
-    fundName: c.fund.name,
-    currency: c.fund.currency,
-    commitmentAmount: c.commitmentAmount,
-    fundedAmount: c.fundedAmount,
-    navAmount: c.navAmount,
-    distributionsAmount: c.distributionsAmount,
-  }));
+  // Build commitment data using lifecycle logic (events > stored fallback)
+  const commitmentInputs: CommitmentInput[] = [];
+  const commitmentDetails: CommitmentDetail[] = [];
 
-  // Build detailed commitment data with metrics and projections
-  const commitmentDetails: CommitmentDetail[] = sleeve.commitments.map((c) => {
-    const metrics = computeFundMetrics(c.fundedAmount, c.navAmount, c.distributionsAmount, c.commitmentAmount);
+  for (const c of sleeve.commitments) {
+    // Compute snapshot from events (falls back to stored fields)
+    const events = c.cashflowEvents.map((e) => ({
+      type: e.type as "CALL" | "DISTRIBUTION",
+      eventDate: e.eventDate.toISOString().slice(0, 10),
+      amount: e.amount,
+      currency: e.currency,
+    }));
+    const navPts = c.navPoints.map((n) => ({
+      date: n.date.toISOString().slice(0, 10),
+      navAmount: n.navAmount,
+    }));
+    const snapshot = computeSnapshotFromEvents(
+      events, navPts,
+      c.fundedAmount, c.navAmount, c.distributionsAmount,
+      c.latestNavDate?.toISOString().slice(0, 10) ?? null,
+    );
+
+    const metrics = computeFundMetrics(snapshot.paidIn, snapshot.latestNav ?? 0, snapshot.distributions, c.commitmentAmount);
+
+    // Template selection: scenario override > fund truth default > fund profile fallback
+    const scenarioOverride = c.scenario
+      ? { templateId: c.scenario.selectedTemplate.id, templateName: c.scenario.selectedTemplate.name }
+      : null;
+    const fundDefault = c.fund.truth?.defaultTemplate
+      ? { templateId: c.fund.truth.defaultTemplate.id, templateName: c.fund.truth.defaultTemplate.name }
+      : null;
+    const templateChoice = selectTemplate(scenarioOverride, fundDefault);
 
     let projectedCalls: { month: string; amount: number }[] = [];
     let projectedDistributions: { month: string; amount: number }[] = [];
+    let templateName = "";
+    let templateSource = "";
 
-    if (c.fund.profile) {
-      try {
-        const callCurve: CurvePoint[] = JSON.parse(c.fund.profile.projectedCallPctCurveJson);
-        const incCalls = curveCumToIncremental(callCurve);
-        projectedCalls = scaleIncrementalPctToDollars(incCalls, c.commitmentAmount);
-      } catch { /* empty */ }
-      try {
-        const distCurve: CurvePoint[] = JSON.parse(c.fund.profile.projectedDistPctCurveJson);
-        const incDist = curveCumToIncremental(distCurve);
-        projectedDistributions = scaleIncrementalPctToDollars(incDist, c.commitmentAmount);
-      } catch { /* empty */ }
+    if (templateChoice.source !== "none") {
+      // Use the selected template's curves
+      const tmpl = c.scenario?.selectedTemplate ?? c.fund.truth?.defaultTemplate;
+      if (tmpl) {
+        const proj = computeProjections(
+          tmpl.callCurvePctJson, tmpl.distCurvePctJson,
+          c.commitmentAmount, templateChoice.templateName, templateChoice.source,
+        );
+        projectedCalls = proj.projectedCalls;
+        projectedDistributions = proj.projectedDistributions;
+        templateName = proj.templateName;
+        templateSource = proj.templateSource;
+      }
+    } else if (c.fund.profile) {
+      // Legacy fallback: use fund profile curves
+      const proj = computeProjections(
+        c.fund.profile.projectedCallPctCurveJson,
+        c.fund.profile.projectedDistPctCurveJson,
+        c.commitmentAmount, "Fund Profile", "legacy",
+      );
+      projectedCalls = proj.projectedCalls;
+      projectedDistributions = proj.projectedDistributions;
+      templateName = proj.templateName;
+      templateSource = proj.templateSource;
     }
 
-    return {
+    commitmentInputs.push({
       fundId: c.fundId,
       fundName: c.fund.name,
       currency: c.fund.currency,
       commitmentAmount: c.commitmentAmount,
-      fundedAmount: c.fundedAmount,
-      navAmount: c.navAmount,
-      distributionsAmount: c.distributionsAmount,
-      latestNavDate: c.latestNavDate?.toISOString().slice(0, 10) ?? null,
+      fundedAmount: snapshot.paidIn,
+      navAmount: snapshot.latestNav ?? 0,
+      distributionsAmount: snapshot.distributions,
+    });
+
+    commitmentDetails.push({
+      fundId: c.fundId,
+      fundName: c.fund.name,
+      currency: c.fund.currency,
+      commitmentAmount: c.commitmentAmount,
+      fundedAmount: snapshot.paidIn,
+      navAmount: snapshot.latestNav ?? 0,
+      distributionsAmount: snapshot.distributions,
+      latestNavDate: snapshot.latestNavDate,
       metrics,
       projectedCalls,
       projectedDistributions,
-    };
-  });
+      commitmentId: c.id,
+      eventCount: c.cashflowEvents.length,
+      navPointCount: c.navPoints.length,
+      snapshotSource: snapshot.source,
+      templateName,
+      templateSource,
+      scenarioTemplateId: c.scenario?.selectedTemplateId ?? null,
+    });
+  }
 
   const liquidInputs = sleeve.liquidPositions.map((p) => ({
     productId: p.productId,
@@ -1229,6 +1300,13 @@ async function SleeveSection({ clientId }: { clientId: string }) {
     orderBy: { name: "asc" },
   });
 
+  // Active projection templates for scenario selector
+  const projectionTemplates = await prisma.pMProjectionTemplate.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+
   return (
     <div className="mt-8">
       <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
@@ -1259,6 +1337,7 @@ async function SleeveSection({ clientId }: { clientId: string }) {
         buyWaterfall={buyWaterfall}
         minTradeAmount={sleeve.minTradeAmount}
         recommendations={recommendationsForUI}
+        projectionTemplates={projectionTemplates}
       />
     </div>
   );
