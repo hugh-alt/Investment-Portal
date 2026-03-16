@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "PMFundDistributionAllocation_distributionEventId_clientCommi_ke" RENAME TO "PMFundDistributionAllocation_distributionEventId_clientComm_key";

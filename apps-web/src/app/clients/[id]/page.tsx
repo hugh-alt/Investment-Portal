@@ -32,7 +32,7 @@ import { SAASelector } from "./saa-selector";
 import { DriftView } from "./drift-view";
 import { CreateSleeveForm, SleeveSummary } from "./sleeve-view";
 import { RebalanceGenerateButton, RebalancePlanCard } from "./rebalance-view";
-import { computeExpectedOutcomes, computeHorizonOutcomes, type CMAInput, type WeightInput } from "@/lib/cma";
+import { computeExpectedOutcomes, computeHorizonOutcomes, type CMAInput, type WeightInput, type CorrelationEntry } from "@/lib/cma";
 import { ExpectedOutcomesView } from "./expected-outcomes-view";
 import {
   buildLiquidityLadder,
@@ -692,7 +692,7 @@ async function ExpectedOutcomesSection({
   // Get all ACTIVE CMA sets for the dropdown
   const activeCmaSets = await prisma.cMASet.findMany({
     where: { status: "ACTIVE" },
-    include: { assumptions: true },
+    include: { assumptions: true, correlations: true },
     orderBy: { name: "asc" },
   });
 
@@ -719,6 +719,11 @@ async function ExpectedOutcomesSection({
     incomeYieldPct: a.incomeYieldPct,
   }));
   const riskFreeRatePct = effectiveCMA.riskFreeRatePct;
+  const corrEntries: CorrelationEntry[] = effectiveCMA.correlations.map((c) => ({
+    nodeIdA: c.nodeIdA,
+    nodeIdB: c.nodeIdB,
+    corr: c.corr,
+  }));
 
   // Get taxonomy + mappings for allocation computation
   const taxonomy = await prisma.taxonomy.findFirst({
@@ -805,7 +810,7 @@ async function ExpectedOutcomesSection({
     })),
   );
 
-  const portfolioResult = computeExpectedOutcomes(currentWeights, cmaInputs, riskFreeRatePct);
+  const portfolioResult = computeExpectedOutcomes(currentWeights, cmaInputs, riskFreeRatePct, corrEntries);
   const portfolioHorizons = computeHorizonOutcomes(
     portfolioResult.expectedReturnPct,
     portfolioResult.expectedIncomePct,
@@ -833,7 +838,7 @@ async function ExpectedOutcomesSection({
       nodeName: a.node.name,
       weight: a.targetWeight,
     }));
-    saaResult = computeExpectedOutcomes(saaWeights, cmaInputs, riskFreeRatePct);
+    saaResult = computeExpectedOutcomes(saaWeights, cmaInputs, riskFreeRatePct, corrEntries);
     saaHorizons = computeHorizonOutcomes(
       saaResult.expectedReturnPct,
       saaResult.expectedIncomePct,
@@ -853,9 +858,14 @@ async function ExpectedOutcomesSection({
       incomeYieldPct: a.incomeYieldPct,
     }));
     const defaultRf = defaultCMA.riskFreeRatePct;
-    compareResult = computeExpectedOutcomes(currentWeights, defaultInputs, defaultRf);
+    const defaultCorrs: CorrelationEntry[] = defaultCMA.correlations.map((c) => ({
+      nodeIdA: c.nodeIdA,
+      nodeIdB: c.nodeIdB,
+      corr: c.corr,
+    }));
+    compareResult = computeExpectedOutcomes(currentWeights, defaultInputs, defaultRf, defaultCorrs);
     if (saaWeights.length > 0) {
-      compareSaaResult = computeExpectedOutcomes(saaWeights, defaultInputs, defaultRf);
+      compareSaaResult = computeExpectedOutcomes(saaWeights, defaultInputs, defaultRf, defaultCorrs);
     }
   }
 

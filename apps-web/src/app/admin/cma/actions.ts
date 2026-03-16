@@ -171,3 +171,75 @@ export async function deleteCMASetAction(cmaSetId: string) {
   await prisma.cMASet.delete({ where: { id: cmaSetId } });
   redirect("/admin/cma");
 }
+
+// ── Save correlations ──
+
+const corrEntrySchema = z.object({
+  nodeIdA: z.string().min(1),
+  nodeIdB: z.string().min(1),
+  corr: z.number().min(-1).max(1),
+});
+
+export async function saveCorrelationsAction(
+  cmaSetId: string,
+  entries: { nodeIdA: string; nodeIdB: string; corr: number }[],
+): Promise<{ error?: string; success?: boolean }> {
+  await requireRole("ADMIN");
+
+  const parsed = z.array(corrEntrySchema).safeParse(entries);
+  if (!parsed.success) {
+    return { error: "Invalid correlation entries" };
+  }
+
+  // Delete existing correlations for this set, then re-create
+  await prisma.cMACorrelation.deleteMany({ where: { cmaSetId } });
+
+  if (parsed.data.length > 0) {
+    await prisma.cMACorrelation.createMany({
+      data: parsed.data.map((e) => ({
+        cmaSetId,
+        nodeIdA: e.nodeIdA,
+        nodeIdB: e.nodeIdB,
+        corr: e.corr,
+      })),
+    });
+  }
+
+  revalidatePath(`/admin/cma/${cmaSetId}`);
+  return { success: true };
+}
+
+// ── Block ACTIVE if not PSD ──
+
+export async function updateCMASetStatusWithValidationAction(
+  cmaSetId: string,
+  status: string,
+): Promise<{ error?: string }> {
+  await requireRole("ADMIN");
+
+  if (!validStatuses.includes(status as typeof validStatuses[number])) {
+    return { error: "Invalid status" };
+  }
+
+  if (status === "ACTIVE") {
+    // Check if correlations exist and are PSD
+    const correlations = await prisma.cMACorrelation.findMany({ where: { cmaSetId } });
+    if (correlations.length > 0) {
+      const assumptions = await prisma.cMAAssumption.findMany({ where: { cmaSetId } });
+      const nodeIds = assumptions.map((a) => a.taxonomyNodeId);
+      const { buildCorrelationMatrix, validateCorrelationMatrix } = await import("@/lib/cma");
+      const matrix = buildCorrelationMatrix(
+        nodeIds,
+        correlations.map((c) => ({ nodeIdA: c.nodeIdA, nodeIdB: c.nodeIdB, corr: c.corr })),
+      );
+      const validation = validateCorrelationMatrix(matrix);
+      if (!validation.isPSD) {
+        return { error: "Cannot set ACTIVE: correlation matrix is not positive semi-definite. Repair or fix correlations first." };
+      }
+    }
+  }
+
+  // Delegate to existing logic
+  await updateCMASetStatusAction(cmaSetId, status);
+  return {};
+}

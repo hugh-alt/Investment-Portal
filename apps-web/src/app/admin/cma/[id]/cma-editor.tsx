@@ -8,7 +8,10 @@ import {
   setDefaultCMASetAction,
   deleteCMASetAction,
   updateRiskFreeRateAction,
+  updateCMASetStatusWithValidationAction,
 } from "@/app/admin/cma/actions";
+import { CorrelationEditor } from "./correlation-editor";
+import type { CorrelationEntry } from "@/lib/cma";
 
 const pct = (v: number) => (v * 100).toFixed(1) + "%";
 
@@ -31,18 +34,23 @@ type Node = {
 export function CMASetEditor({
   cmaSetId,
   isDefault,
+  status,
   assumptions,
   nodes,
   riskFreeRatePct,
+  correlations,
 }: {
   cmaSetId: string;
   isDefault: boolean;
+  status: string;
   assumptions: Assumption[];
   nodes: Node[];
   riskFreeRatePct: number;
+  correlations: CorrelationEntry[];
 }) {
   const [state, formAction, pending] = useActionState(upsertAssumptionAction, null);
   const [rfRate, setRfRate] = useState((riskFreeRatePct * 100).toFixed(1));
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   const handleDelete = async (assumptionId: string) => {
     await deleteAssumptionAction(cmaSetId, assumptionId);
@@ -211,6 +219,43 @@ export function CMASetEditor({
           <p className="mt-2 text-sm text-red-600">{state.error}</p>
         )}
       </div>
+
+      {/* Correlations */}
+      <div className="mt-8">
+        <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+          Correlation Matrix
+        </h2>
+        <p className="mt-1 text-xs text-zinc-400">
+          Define pairwise correlations between asset classes. Missing pairs default to 0.
+        </p>
+        <CorrelationEditor
+          cmaSetId={cmaSetId}
+          nodes={assumptions.map((a) => ({
+            id: a.taxonomyNodeId,
+            label: a.nodeName,
+          }))}
+          initialCorrelations={correlations}
+        />
+      </div>
+
+      {/* Status change with PSD validation */}
+      {status !== "ACTIVE" && (
+        <div className="mt-6">
+          <button
+            onClick={async () => {
+              setStatusError(null);
+              const result = await updateCMASetStatusWithValidationAction(cmaSetId, "ACTIVE");
+              if (result.error) setStatusError(result.error);
+            }}
+            className="rounded-md bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-600"
+          >
+            Set as ACTIVE
+          </button>
+          {statusError && (
+            <p className="mt-1 text-xs text-red-600">{statusError}</p>
+          )}
+        </div>
+      )}
 
       {/* Actions */}
       <div className="mt-6 flex items-center gap-4">

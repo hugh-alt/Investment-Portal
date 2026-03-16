@@ -43,9 +43,45 @@ function buildAssumptionData(
   return data;
 }
 
+// Correlations for Base Case (PSD-valid "typical" correlations)
+const BASE_CORRELATIONS: [string, string, number][] = [
+  ["Growth:Australian Equities", "Growth:International Equities", 0.75],
+  ["Growth:Australian Equities", "Defensive:Australian Equities", 0.60],
+  ["Growth:Australian Equities", "Defensive:Fixed Income", 0.15],
+  ["Growth:International Equities", "Defensive:Australian Equities", 0.55],
+  ["Growth:International Equities", "Defensive:Fixed Income", 0.10],
+  ["Defensive:Australian Equities", "Defensive:Fixed Income", 0.30],
+];
+
+// Intentionally non-PSD correlations for the DRAFT set (to demonstrate validation)
+const NON_PSD_CORRELATIONS: [string, string, number][] = [
+  ["Growth:Australian Equities", "Growth:International Equities", 0.90],
+  ["Growth:Australian Equities", "Defensive:Australian Equities", 0.90],
+  ["Growth:Australian Equities", "Defensive:Fixed Income", 0.90],
+  ["Growth:International Equities", "Defensive:Australian Equities", -0.90],
+  ["Growth:International Equities", "Defensive:Fixed Income", -0.90],
+  ["Defensive:Australian Equities", "Defensive:Fixed Income", 0.90],
+];
+
+function buildCorrelationData(
+  pairs: [string, string, number][],
+  nodeByKey: Map<string, string>,
+) {
+  const data: { nodeIdA: string; nodeIdB: string; corr: number }[] = [];
+  for (const [keyA, keyB, corr] of pairs) {
+    const idA = nodeByKey.get(keyA);
+    const idB = nodeByKey.get(keyB);
+    if (idA && idB) {
+      data.push({ nodeIdA: idA, nodeIdB: idB, corr });
+    }
+  }
+  return data;
+}
+
 export async function seedCMA(prisma: PrismaClient, adminUserId: string, wealthGroupId?: string) {
   // Clean up
   await prisma.clientCMASelection.deleteMany({});
+  await prisma.cMACorrelation.deleteMany({});
   await prisma.cMAAssumption.deleteMany({});
   await prisma.cMASet.deleteMany({});
 
@@ -71,7 +107,7 @@ export async function seedCMA(prisma: PrismaClient, adminUserId: string, wealthG
     }
   }
 
-  // 1. ACTIVE default: "2026 Base Case"
+  // 1. ACTIVE default: "2026 Base Case" (with PSD-valid correlations)
   await prisma.cMASet.create({
     data: {
       name: "2026 Base Case",
@@ -83,10 +119,11 @@ export async function seedCMA(prisma: PrismaClient, adminUserId: string, wealthG
       wealthGroupId: wealthGroupId ?? null,
       createdByUserId: adminUserId,
       assumptions: { create: buildAssumptionData(BASE_ASSUMPTIONS, nodeByKey) },
+      correlations: { create: buildCorrelationData(BASE_CORRELATIONS, nodeByKey) },
     },
   });
 
-  // 2. ACTIVE alternate: "2026 Bull Case"
+  // 2. ACTIVE alternate: "2026 Bull Case" (same correlations)
   const bullSet = await prisma.cMASet.create({
     data: {
       name: "2026 Bull Case",
@@ -98,10 +135,27 @@ export async function seedCMA(prisma: PrismaClient, adminUserId: string, wealthG
       wealthGroupId: wealthGroupId ?? null,
       createdByUserId: adminUserId,
       assumptions: { create: buildAssumptionData(BULL_ASSUMPTIONS, nodeByKey) },
+      correlations: { create: buildCorrelationData(BASE_CORRELATIONS, nodeByKey) },
     },
   });
 
-  // 3. RETIRED: "2025 Base Case"
+  // 3. DRAFT: "Non-PSD Demo" (intentionally non-PSD for validation demo)
+  await prisma.cMASet.create({
+    data: {
+      name: "Non-PSD Demo (draft)",
+      description: "Demo set with intentionally non-PSD correlations — cannot activate",
+      isDefault: false,
+      status: CMASetStatus.DRAFT,
+      effectiveDate: new Date("2026-01-01"),
+      riskFreeRatePct: 0.03,
+      wealthGroupId: wealthGroupId ?? null,
+      createdByUserId: adminUserId,
+      assumptions: { create: buildAssumptionData(BASE_ASSUMPTIONS, nodeByKey) },
+      correlations: { create: buildCorrelationData(NON_PSD_CORRELATIONS, nodeByKey) },
+    },
+  });
+
+  // 4. RETIRED: "2025 Base Case"
   await prisma.cMASet.create({
     data: {
       name: "2025 Base Case",
@@ -129,5 +183,5 @@ export async function seedCMA(prisma: PrismaClient, adminUserId: string, wealthG
     });
   }
 
-  console.log("Created 3 CMA sets (with income yields + risk-free rates), 1 client selection");
+  console.log("Created 4 CMA sets (with correlations + income yields + risk-free rates), 1 client selection");
 }

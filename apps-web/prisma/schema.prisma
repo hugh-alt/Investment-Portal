@@ -816,6 +816,7 @@ model CMASet {
   wealthGroup      WealthGroup?         @relation(fields: [wealthGroupId], references: [id])
   createdBy        User                 @relation(fields: [createdByUserId], references: [id])
   assumptions      CMAAssumption[]
+  correlations     CMACorrelation[]
   clientSelections ClientCMASelection[]
 }
 
@@ -831,6 +832,20 @@ model CMAAssumption {
   node   TaxonomyNode @relation(fields: [taxonomyNodeId], references: [id])
 
   @@unique([cmaSetId, taxonomyNodeId])
+}
+
+model CMACorrelation {
+  id        String   @id @default(cuid())
+  cmaSetId  String
+  nodeIdA   String
+  nodeIdB   String
+  corr      Float    // -1 to 1
+  createdAt DateTime @default(now())
+
+  cmaSet CMASet @relation(fields: [cmaSetId], references: [id], onDelete: Cascade)
+
+  @@unique([cmaSetId, nodeIdA, nodeIdB])
+  @@index([cmaSetId])
 }
 
 model ClientCMASelection {

@@ -20,6 +20,7 @@ export default async function CMASetPage({
         },
         orderBy: { node: { sortOrder: "asc" } },
       },
+      correlations: true,
     },
   });
 
@@ -108,9 +109,15 @@ export default async function CMASetPage({
       <CMASetEditor
         cmaSetId={cmaSet.id}
         isDefault={cmaSet.isDefault}
+        status={cmaSet.status}
         assumptions={assumptionData}
         nodes={nodeLabels}
         riskFreeRatePct={cmaSet.riskFreeRatePct}
+        correlations={cmaSet.correlations.map((c) => ({
+          nodeIdA: c.nodeIdA,
+          nodeIdB: c.nodeIdB,
+          corr: c.corr,
+        }))}
       />
     </div>
   );

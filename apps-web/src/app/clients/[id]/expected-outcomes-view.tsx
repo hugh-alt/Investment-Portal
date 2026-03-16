@@ -67,9 +67,11 @@ function OutcomeCard({
           </p>
         </div>
         <div>
-          <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Risk (vol)</p>
+          <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+            {result.portfolioVolPct != null ? "Risk (corr)" : "Risk (proxy)"}
+          </p>
           <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-            {pctFmt(result.riskProxyPct)}
+            {pctFmt(result.portfolioVolPct ?? result.riskProxyPct)}
           </p>
         </div>
         <div>
@@ -106,6 +108,16 @@ function OutcomeCard({
       {result.missingCoveragePct > 0.005 && (
         <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
           Missing CMA coverage: {pctFmt(result.missingCoveragePct)}
+        </p>
+      )}
+      {result.correlationWarning && (
+        <p className="mt-1 text-xs text-yellow-600 dark:text-yellow-400">
+          {result.correlationWarning}
+        </p>
+      )}
+      {result.portfolioVolPct == null && (
+        <p className="mt-1 text-xs text-zinc-400">
+          Risk uses weighted-average proxy (no correlations defined)
         </p>
       )}
 
