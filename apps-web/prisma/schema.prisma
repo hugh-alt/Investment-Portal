@@ -487,6 +487,7 @@ model ClientSleeve {
   sellWaterfallJson   String       @default("[]") // JSON: ordered ProductType[] or taxonomy node names
   buyWaterfallJson    String       @default("[]") // JSON: ordered ProductType[] or taxonomy node names
   minTradeAmount      Float        @default(1000)
+  configJson          String       @default("{}") // JSON: extended display metadata
   createdAt           DateTime     @default(now())
 
   client          Client                  @relation(fields: [clientId], references: [id])

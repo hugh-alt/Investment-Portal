@@ -47,7 +47,7 @@ CREATE TABLE "PMFundKpiPoint" (
 
 -- CreateIndex
 CREATE INDEX "PMFundDistributionEvent_fundId_eventDate_idx" ON "PMFundDistributionEvent"("fundId", "eventDate");
-CREATE UNIQUE INDEX "PMFundDistributionAllocation_distributionEventId_clientCommi_key" ON "PMFundDistributionAllocation"("distributionEventId", "clientCommitmentId");
+CREATE UNIQUE INDEX "PMFundDistributionAllocation_distributionEventId_clientComm_key" ON "PMFundDistributionAllocation"("distributionEventId", "clientCommitmentId");
 CREATE INDEX "PMFundKpiPoint_fundId_kpiDate_idx" ON "PMFundKpiPoint"("fundId", "kpiDate");
 
 -- AddForeignKey

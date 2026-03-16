@@ -36,11 +36,17 @@ const FUND_PRODUCTS = [
   { id: "prod-f2", name: "Hyperion Small Growth Fund", type: ProductType.FUND },
 ];
 
+const CASH_PRODUCTS = [
+  { id: "__AUD_CASH__", name: "AUD Cash", type: ProductType.DIRECT },
+  { id: "__USD_CASH__", name: "USD Cash", type: ProductType.DIRECT },
+];
+
 const ALL_PRODUCTS = [
   ...DIRECT_PRODUCTS,
   ...ETF_PRODUCTS,
   ...MANAGED_PRODUCTS,
   ...FUND_PRODUCTS,
+  ...CASH_PRODUCTS,
 ];
 
 // Underlying holdings for each managed portfolio

@@ -60,7 +60,16 @@ export function CreateSleeveForm({ clientId }: { clientId: string }) {
   return (
     <div className="mt-4 rounded-lg border border-dashed border-zinc-300 p-4 dark:border-zinc-700">
       <p className="text-sm text-zinc-500">No private markets sleeve yet.</p>
-      <form action={action} className="mt-3 flex flex-wrap items-end gap-3">
+      <div className="mt-3 mb-3">
+        <a
+          href="/adviser/sleeve/new"
+          className="inline-block rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-600"
+        >
+          Setup via Wizard
+        </a>
+        <span className="mx-2 text-sm text-zinc-400">or quick create below:</span>
+      </div>
+      <form action={action} className="flex flex-wrap items-end gap-3">
         <input type="hidden" name="clientId" value={clientId} />
         <div>
           <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Name</label>
