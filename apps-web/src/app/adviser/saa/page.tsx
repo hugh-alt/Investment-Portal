@@ -38,12 +38,20 @@ export default async function SAAListPage() {
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
             Strategic Asset Allocations
           </h1>
-          <Link
-            href="/adviser/saa/new"
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            + New SAA
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/adviser/saa/new/step-1"
+              className="rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-600"
+            >
+              + New SAA (Wizard)
+            </Link>
+            <Link
+              href="/adviser/saa/new"
+              className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
+            >
+              Quick Create
+            </Link>
+          </div>
         </div>
 
         {saas.length === 0 ? (
