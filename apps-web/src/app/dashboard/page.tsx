@@ -16,6 +16,7 @@ const SUPER_ADMIN_LINKS = [
   ...ADMIN_LINKS,
   { href: "/platform/wealth-groups", label: "Wealth Groups" },
   { href: "/platform/pm-templates", label: "PM Projection Templates" },
+  { href: "/platform/pm-funds", label: "PM Fund Truth Layer" },
 ];
 
 const ADVISER_LINKS = [

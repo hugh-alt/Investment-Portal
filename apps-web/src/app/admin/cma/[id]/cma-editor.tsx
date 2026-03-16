@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import Link from "next/link";
 import {
   upsertAssumptionAction,
   deleteAssumptionAction,
   setDefaultCMASetAction,
   deleteCMASetAction,
+  updateRiskFreeRateAction,
 } from "@/app/admin/cma/actions";
 
 const pct = (v: number) => (v * 100).toFixed(1) + "%";
@@ -18,6 +19,7 @@ type Assumption = {
   nodeType: string;
   expReturnPct: number;
   volPct: number;
+  incomeYieldPct: number;
 };
 
 type Node = {
@@ -31,13 +33,16 @@ export function CMASetEditor({
   isDefault,
   assumptions,
   nodes,
+  riskFreeRatePct,
 }: {
   cmaSetId: string;
   isDefault: boolean;
   assumptions: Assumption[];
   nodes: Node[];
+  riskFreeRatePct: number;
 }) {
   const [state, formAction, pending] = useActionState(upsertAssumptionAction, null);
+  const [rfRate, setRfRate] = useState((riskFreeRatePct * 100).toFixed(1));
 
   const handleDelete = async (assumptionId: string) => {
     await deleteAssumptionAction(cmaSetId, assumptionId);
@@ -52,12 +57,41 @@ export function CMASetEditor({
     await deleteCMASetAction(cmaSetId);
   };
 
-  // Nodes not yet assigned
+  const handleRfRateChange = async () => {
+    const val = parseFloat(rfRate);
+    if (!isNaN(val)) {
+      await updateRiskFreeRateAction(cmaSetId, val);
+    }
+  };
+
   const assignedNodeIds = new Set(assumptions.map((a) => a.taxonomyNodeId));
   const availableNodes = nodes.filter((n) => !assignedNodeIds.has(n.id));
 
   return (
     <div>
+      {/* Risk-free rate */}
+      <div className="mt-4 flex items-end gap-3">
+        <div>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+            Risk-free rate %
+          </label>
+          <input
+            type="number"
+            step="0.1"
+            value={rfRate}
+            onChange={(e) => setRfRate(e.target.value)}
+            className="mt-1 w-24 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          />
+        </div>
+        <button
+          onClick={handleRfRateChange}
+          className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          Update
+        </button>
+        <span className="text-xs text-zinc-400">Used for Sharpe ratio calculation</span>
+      </div>
+
       {/* Assumptions table */}
       <div className="mt-6">
         <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
@@ -72,6 +106,7 @@ export function CMASetEditor({
                 <th className="pb-2 font-medium text-zinc-500">Type</th>
                 <th className="pb-2 text-right font-medium text-zinc-500">Exp. Return</th>
                 <th className="pb-2 text-right font-medium text-zinc-500">Volatility</th>
+                <th className="pb-2 text-right font-medium text-zinc-500">Income Yield</th>
                 <th className="pb-2 font-medium text-zinc-500"></th>
               </tr>
             </thead>
@@ -85,6 +120,9 @@ export function CMASetEditor({
                   </td>
                   <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
                     {pct(a.volPct)}
+                  </td>
+                  <td className="py-2 text-right text-zinc-600 dark:text-zinc-400">
+                    {pct(a.incomeYieldPct)}
                   </td>
                   <td className="py-2 text-right">
                     <button
@@ -145,6 +183,18 @@ export function CMASetEditor({
                 step="0.1"
                 required
                 placeholder="16.0"
+                className="mt-1 w-20 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                Income %
+              </label>
+              <input
+                name="incomeYieldPct"
+                type="number"
+                step="0.1"
+                placeholder="3.0"
                 className="mt-1 w-20 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
               />
             </div>

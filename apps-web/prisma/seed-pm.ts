@@ -1,5 +1,5 @@
 import { PrismaClient } from "../src/generated/prisma/client";
-import { PMFundStatus, LifecycleStage, BufferMethod, ApprovalStatus, RecommendationKind, RecommendationAction, ApprovalAction, PMTemplateStatus, CashflowEventType } from "../src/generated/prisma/enums";
+import { PMFundStatus, LifecycleStage, BufferMethod, ApprovalStatus, RecommendationKind, RecommendationAction, ApprovalAction, PMTemplateStatus, CashflowEventType, CloseType, DistributionBasis } from "../src/generated/prisma/enums";
 
 const PM_FUNDS = [
   { id: "pmf-infra", name: "Macquarie Infrastructure Fund V", vintageYear: 2023, strategy: "Infrastructure", currency: "AUD", status: PMFundStatus.OPEN, lifecycleStage: LifecycleStage.INVESTING, firstCloseDate: new Date("2023-03-15"), investmentPeriodMonths: 48, fundTermMonths: 120 },
@@ -88,6 +88,12 @@ export async function seedPM(
   await prisma.sleeveLiquidPosition.deleteMany({});
   await prisma.clientCommitment.deleteMany({});
   await prisma.clientSleeve.deleteMany({});
+  await prisma.pMFundDistributionAllocation.deleteMany({});
+  await prisma.pMFundDistributionEvent.deleteMany({});
+  await prisma.pMFundKpiPoint.deleteMany({});
+  await prisma.pMFundCashflowEvent.deleteMany({});
+  await prisma.pMFundNAVPoint.deleteMany({});
+  await prisma.pMFundClose.deleteMany({});
   await prisma.pMFundTruth.deleteMany({});
   await prisma.pMFundProfile.deleteMany({});
   await prisma.pMFundApproval.deleteMany({});
@@ -401,6 +407,169 @@ export async function seedPM(
     });
   }
 
+  // ── Fund-Level Truth Data: Closes, NAV, Cashflows ──
+
+  // Closes for pmf-infra (Infrastructure Fund)
+  await prisma.pMFundClose.createMany({
+    data: [
+      { fundId: "pmf-infra", closeType: CloseType.FIRST, closeDate: new Date("2023-03-15"), capitalRaised: 250000000, notes: "First close - anchor investors" },
+      { fundId: "pmf-infra", closeType: CloseType.SECOND, closeDate: new Date("2023-09-01"), capitalRaised: 150000000, notes: "Second close" },
+      { fundId: "pmf-infra", closeType: CloseType.FINAL, closeDate: new Date("2024-03-15"), capitalRaised: 100000000, notes: "Final close - total $500M" },
+    ],
+  });
+
+  // Closes for pmf-pe1 (PE Fund)
+  await prisma.pMFundClose.createMany({
+    data: [
+      { fundId: "pmf-pe1", closeType: CloseType.FIRST, closeDate: new Date("2024-01-10"), capitalRaised: 400000000, notes: "First close" },
+      { fundId: "pmf-pe1", closeType: CloseType.SECOND, closeDate: new Date("2024-07-15"), capitalRaised: 300000000 },
+    ],
+  });
+
+  // Fund-level NAV points for pmf-infra (4dp precision)
+  await prisma.pMFundNAVPoint.createMany({
+    data: [
+      { fundId: "pmf-infra", navDate: new Date("2025-06-30"), navAmount: 520000000.1234, currency: "AUD" },
+      { fundId: "pmf-infra", navDate: new Date("2025-09-30"), navAmount: 545000000.5678, currency: "AUD" },
+      { fundId: "pmf-infra", navDate: new Date("2025-12-31"), navAmount: 560000000.9012, currency: "AUD" },
+      { fundId: "pmf-infra", navDate: new Date("2026-02-28"), navAmount: 575000000.3456, currency: "AUD" },
+    ],
+  });
+
+  // Fund-level NAV points for pmf-pe1
+  await prisma.pMFundNAVPoint.createMany({
+    data: [
+      { fundId: "pmf-pe1", navDate: new Date("2025-12-31"), navAmount: 380000000.7890, currency: "AUD" },
+      { fundId: "pmf-pe1", navDate: new Date("2026-02-28"), navAmount: 395000000.1234, currency: "AUD" },
+    ],
+  });
+
+  // Fund-level CALL events using callPct (% of commitment)
+  await prisma.pMFundCashflowEvent.createMany({
+    data: [
+      { fundId: "pmf-infra", type: CashflowEventType.CALL, eventDate: new Date("2023-06-15"), callPct: 0.25, amount: null, currency: "AUD", notes: "Capital call #1 — 25%" },
+      { fundId: "pmf-infra", type: CashflowEventType.CALL, eventDate: new Date("2024-01-15"), callPct: 0.25, amount: null, currency: "AUD", notes: "Capital call #2 — 25%" },
+      { fundId: "pmf-infra", type: CashflowEventType.CALL, eventDate: new Date("2024-09-15"), callPct: 0.20, amount: null, currency: "AUD", notes: "Capital call #3 — 20%" },
+    ],
+  });
+
+  // pmf-vc1 call events (% based)
+  await prisma.pMFundCashflowEvent.createMany({
+    data: [
+      { fundId: "pmf-vc1", type: CashflowEventType.CALL, eventDate: new Date("2022-09-01"), callPct: 0.15, amount: null, currency: "AUD", notes: "Initial call — 15%" },
+      { fundId: "pmf-vc1", type: CashflowEventType.CALL, eventDate: new Date("2023-03-01"), callPct: 0.10, amount: null, currency: "AUD", notes: "Follow-on — 10%" },
+    ],
+  });
+
+  // KPI points for pmf-infra
+  await prisma.pMFundKpiPoint.createMany({
+    data: [
+      { fundId: "pmf-infra", kpiDate: new Date("2025-12-31"), tvpi: 1.1456, rvpi: 1.0234, dpi: 0.1222, moic: 1.1456 },
+      { fundId: "pmf-infra", kpiDate: new Date("2026-02-28"), tvpi: 1.1789, rvpi: 1.0567, dpi: 0.1222, moic: 1.1789 },
+    ],
+  });
+
+  // KPI points for pmf-pe1
+  await prisma.pMFundKpiPoint.createMany({
+    data: [
+      { fundId: "pmf-pe1", kpiDate: new Date("2025-12-31"), tvpi: 1.0500, rvpi: 0.9800, dpi: 0.0700, moic: 1.0500 },
+      { fundId: "pmf-pe1", kpiDate: new Date("2026-02-28"), tvpi: 1.0890, rvpi: 1.0190, dpi: 0.0700, moic: 1.0890 },
+    ],
+  });
+
+  // ── Distribution Events with Allocations ──
+  // pmf-infra: Alice has 500k commitment, Bob doesn't have infra
+  // Both Alice and Bob have commitments that feed allocations
+
+  // Distribution #1 for pmf-infra — pro-rata commitment
+  const infraDist1 = await prisma.pMFundDistributionEvent.create({
+    data: {
+      fundId: "pmf-infra",
+      eventDate: new Date("2025-06-30"),
+      totalAmount: 15000000,
+      currency: "AUD",
+      basis: DistributionBasis.PRO_RATA_COMMITMENT,
+      notes: "Dividend distribution",
+    },
+  });
+
+  // Find infra commitments for allocations
+  const infraCommitmentsForAlloc = await prisma.clientCommitment.findMany({
+    where: { fundId: "pmf-infra" },
+  });
+  if (infraCommitmentsForAlloc.length > 0) {
+    const totalCommitment = infraCommitmentsForAlloc.reduce((s, c) => s + c.commitmentAmount, 0);
+    for (const c of infraCommitmentsForAlloc) {
+      const share = Math.round((15000000 * c.commitmentAmount / totalCommitment) * 100) / 100;
+      await prisma.pMFundDistributionAllocation.create({
+        data: {
+          distributionEventId: infraDist1.id,
+          clientCommitmentId: c.id,
+          amount: share,
+          pctOfCommitment: share / c.commitmentAmount,
+        },
+      });
+    }
+  }
+
+  // Distribution #2 for pmf-infra — year-end
+  const infraDist2 = await prisma.pMFundDistributionEvent.create({
+    data: {
+      fundId: "pmf-infra",
+      eventDate: new Date("2025-12-31"),
+      totalAmount: 20000000,
+      currency: "AUD",
+      basis: DistributionBasis.PRO_RATA_COMMITMENT,
+      notes: "Year-end distribution",
+    },
+  });
+
+  if (infraCommitmentsForAlloc.length > 0) {
+    const totalCommitment = infraCommitmentsForAlloc.reduce((s, c) => s + c.commitmentAmount, 0);
+    for (const c of infraCommitmentsForAlloc) {
+      const share = Math.round((20000000 * c.commitmentAmount / totalCommitment) * 100) / 100;
+      await prisma.pMFundDistributionAllocation.create({
+        data: {
+          distributionEventId: infraDist2.id,
+          clientCommitmentId: c.id,
+          amount: share,
+          pctOfCommitment: share / c.commitmentAmount,
+        },
+      });
+    }
+  }
+
+  // Distribution for pmf-vc1 (Bob has commitment) — pro-rata paid-in
+  const vc1Dist = await prisma.pMFundDistributionEvent.create({
+    data: {
+      fundId: "pmf-vc1",
+      eventDate: new Date("2025-03-31"),
+      totalAmount: 12000000,
+      currency: "AUD",
+      basis: DistributionBasis.PRO_RATA_PAIDIN,
+      notes: "Partial exit — portfolio company IPO",
+    },
+  });
+
+  const vc1Commitments = await prisma.clientCommitment.findMany({
+    where: { fundId: "pmf-vc1" },
+  });
+  if (vc1Commitments.length > 0) {
+    const totalFunded = vc1Commitments.reduce((s, c) => s + c.fundedAmount, 0);
+    for (const c of vc1Commitments) {
+      const weight = totalFunded > 0 ? c.fundedAmount / totalFunded : 1 / vc1Commitments.length;
+      const share = Math.round((12000000 * weight) * 100) / 100;
+      await prisma.pMFundDistributionAllocation.create({
+        data: {
+          distributionEventId: vc1Dist.id,
+          clientCommitmentId: c.id,
+          amount: share,
+          pctOfCommitment: share / c.commitmentAmount,
+        },
+      });
+    }
+  }
+
   // ── Cashflow Events + NAV Points for Alice's infra commitment ──
   // Find Alice's commitments (sleeve1)
   const aliceCommitments = await prisma.clientCommitment.findMany({
@@ -448,5 +617,5 @@ export async function seedPM(
     });
   }
 
-  console.log("Created 8 PM funds, 3 projection templates (Fast/Base/Slow), fund truth records, cashflow events, NAV points, scenario override, 2 client sleeves, 1 CLIENT_APPROVED recommendation");
+  console.log("Created 8 PM funds, 3 templates, fund truth, closes, NAV (4dp), calls (callPct), distributions w/ allocations, KPIs, client cashflows, 2 sleeves, 1 recommendation");
 }

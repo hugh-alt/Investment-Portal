@@ -26,7 +26,6 @@ export default async function CMASetPage({
   if (!cmaSet) notFound();
 
   // Get taxonomy nodes for the assumption selector
-  // Use the taxonomy from the first assumption, or find the default
   let taxonomyNodes: { id: string; name: string; nodeType: string; parentId: string | null }[] = [];
   if (cmaSet.assumptions.length > 0) {
     const taxId = cmaSet.assumptions[0].node.taxonomyId;
@@ -56,6 +55,7 @@ export default async function CMASetPage({
     nodeType: a.node.nodeType,
     expReturnPct: a.expReturnPct,
     volPct: a.volPct,
+    incomeYieldPct: a.incomeYieldPct,
   }));
 
   // Filter to ASSET_CLASS and SUB_ASSET
@@ -110,6 +110,7 @@ export default async function CMASetPage({
         isDefault={cmaSet.isDefault}
         assumptions={assumptionData}
         nodes={nodeLabels}
+        riskFreeRatePct={cmaSet.riskFreeRatePct}
       />
     </div>
   );

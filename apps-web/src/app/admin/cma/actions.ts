@@ -12,6 +12,7 @@ const createSetSchema = z.object({
   name: z.string().min(1),
   description: z.string().nullable().optional(),
   effectiveDate: z.string().nullable().optional(),
+  riskFreeRatePct: z.coerce.number().min(-10).max(100).optional(),
 });
 
 export async function createCMASetAction(
@@ -23,16 +24,22 @@ export async function createCMASetAction(
     name: formData.get("name"),
     description: formData.get("description"),
     effectiveDate: formData.get("effectiveDate"),
+    riskFreeRatePct: formData.get("riskFreeRatePct") || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message };
   }
+
+  const riskFreeRate = parsed.data.riskFreeRatePct != null
+    ? parsed.data.riskFreeRatePct / 100
+    : 0.03;
 
   const cmaSet = await prisma.cMASet.create({
     data: {
       name: parsed.data.name,
       description: parsed.data.description || null,
       effectiveDate: parsed.data.effectiveDate ? new Date(parsed.data.effectiveDate) : null,
+      riskFreeRatePct: riskFreeRate,
       wealthGroupId: user.wealthGroupId,
       createdByUserId: user.id,
     },
@@ -48,6 +55,7 @@ const assumptionSchema = z.object({
   taxonomyNodeId: z.string().min(1),
   expReturnPctInput: z.coerce.number().min(-100).max(100),
   volPctInput: z.coerce.number().min(0).max(100),
+  incomeYieldPctInput: z.coerce.number().min(0).max(100).optional(),
 });
 
 export async function upsertAssumptionAction(
@@ -60,21 +68,23 @@ export async function upsertAssumptionAction(
     taxonomyNodeId: formData.get("taxonomyNodeId"),
     expReturnPctInput: formData.get("expReturnPct"),
     volPctInput: formData.get("volPct"),
+    incomeYieldPctInput: formData.get("incomeYieldPct") || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message };
   }
 
-  const { cmaSetId, taxonomyNodeId, expReturnPctInput, volPctInput } = parsed.data;
+  const { cmaSetId, taxonomyNodeId, expReturnPctInput, volPctInput, incomeYieldPctInput } = parsed.data;
   const expReturnPct = expReturnPctInput / 100;
   const volPct = volPctInput / 100;
+  const incomeYieldPct = incomeYieldPctInput != null ? incomeYieldPctInput / 100 : 0;
 
   await prisma.cMAAssumption.upsert({
     where: {
       cmaSetId_taxonomyNodeId: { cmaSetId, taxonomyNodeId },
     },
-    update: { expReturnPct, volPct },
-    create: { cmaSetId, taxonomyNodeId, expReturnPct, volPct },
+    update: { expReturnPct, volPct, incomeYieldPct },
+    create: { cmaSetId, taxonomyNodeId, expReturnPct, volPct, incomeYieldPct },
   });
 
   revalidatePath(`/admin/cma/${cmaSetId}`);
@@ -86,6 +96,17 @@ export async function upsertAssumptionAction(
 export async function deleteAssumptionAction(cmaSetId: string, assumptionId: string) {
   await requireRole("ADMIN");
   await prisma.cMAAssumption.delete({ where: { id: assumptionId } });
+  revalidatePath(`/admin/cma/${cmaSetId}`);
+}
+
+// ── Update risk-free rate ──
+
+export async function updateRiskFreeRateAction(cmaSetId: string, riskFreeRatePct: number) {
+  await requireRole("ADMIN");
+  await prisma.cMASet.update({
+    where: { id: cmaSetId },
+    data: { riskFreeRatePct: riskFreeRatePct / 100 },
+  });
   revalidatePath(`/admin/cma/${cmaSetId}`);
 }
 
@@ -121,7 +142,6 @@ export async function updateCMASetStatusAction(cmaSetId: string, status: string)
 
   if (!validStatuses.includes(status as typeof validStatuses[number])) return;
 
-  // If retiring the default, unset default
   const current = await prisma.cMASet.findUnique({ where: { id: cmaSetId } });
   if (!current) return;
 
@@ -130,7 +150,6 @@ export async function updateCMASetStatusAction(cmaSetId: string, status: string)
   if (status === "RETIRED" && current.isDefault) {
     updates.isDefault = false;
   }
-  // If moving away from ACTIVE and it was default, unset default
   if (status !== "ACTIVE" && current.isDefault) {
     updates.isDefault = false;
   }
@@ -148,7 +167,6 @@ export async function updateCMASetStatusAction(cmaSetId: string, status: string)
 
 export async function deleteCMASetAction(cmaSetId: string) {
   await requireRole("ADMIN");
-  // Remove any client selections pointing to this set first
   await prisma.clientCMASelection.deleteMany({ where: { cmaSetId } });
   await prisma.cMASet.delete({ where: { id: cmaSetId } });
   redirect("/admin/cma");

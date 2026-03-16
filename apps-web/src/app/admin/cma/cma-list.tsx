@@ -73,6 +73,18 @@ export function CMAListClient({ cmaSets }: { cmaSets: CMASetRow[] }) {
             className="mt-1 rounded border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           />
         </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+            Risk-free rate %
+          </label>
+          <input
+            name="riskFreeRatePct"
+            type="number"
+            step="0.1"
+            defaultValue="3.0"
+            className="mt-1 w-20 rounded border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          />
+        </div>
         <button
           type="submit"
           disabled={pending}

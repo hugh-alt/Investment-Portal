@@ -301,6 +301,13 @@ model PMProjectionTemplate {
   commitmentScenarios     ClientCommitmentScenario[]
 }
 
+enum CloseType {
+  FIRST
+  SECOND
+  FINAL
+  OTHER
+}
+
 model PMFundTruth {
   id                     String          @id @default(cuid())
   fundId                 String          @unique
@@ -309,10 +316,104 @@ model PMFundTruth {
   firstCloseDate         DateTime?
   investmentPeriodMonths Int?
   fundTermMonths         Int?
+  extensionMonths        Int?
   updatedAt              DateTime        @updatedAt
 
   fund             PMFund                @relation(fields: [fundId], references: [id], onDelete: Cascade)
   defaultTemplate  PMProjectionTemplate? @relation(fields: [defaultTemplateId], references: [id])
+}
+
+model PMFundClose {
+  id        String    @id @default(cuid())
+  fundId    String
+  closeType CloseType
+  closeDate DateTime
+  capitalRaised Float?
+  notes     String?
+  createdAt DateTime  @default(now())
+
+  fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@index([fundId, closeDate])
+}
+
+model PMFundNAVPoint {
+  id        String   @id @default(cuid())
+  fundId    String
+  navDate   DateTime
+  navAmount Float
+  currency  String   @default("AUD")
+  createdAt DateTime @default(now())
+
+  fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@index([fundId, navDate])
+}
+
+model PMFundCashflowEvent {
+  id        String            @id @default(cuid())
+  fundId    String
+  type      CashflowEventType
+  eventDate DateTime
+  amount    Float?            // used for DISTRIBUTION legacy; nullable for CALL (use callPct)
+  callPct   Float?            // 0..1 for CALL events (% of commitment)
+  currency  String            @default("AUD")
+  notes     String?
+  createdAt DateTime          @default(now())
+
+  fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@index([fundId, eventDate])
+}
+
+enum DistributionBasis {
+  PRO_RATA_COMMITMENT
+  PRO_RATA_PAIDIN
+}
+
+model PMFundDistributionEvent {
+  id          String             @id @default(cuid())
+  fundId      String
+  eventDate   DateTime
+  totalAmount Float
+  currency    String             @default("AUD")
+  basis       DistributionBasis  @default(PRO_RATA_COMMITMENT)
+  notes       String?
+  createdAt   DateTime           @default(now())
+
+  fund        PMFund                        @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  allocations PMFundDistributionAllocation[]
+
+  @@index([fundId, eventDate])
+}
+
+model PMFundDistributionAllocation {
+  id                   String  @id @default(cuid())
+  distributionEventId  String
+  clientCommitmentId   String
+  amount               Float
+  pctOfCommitment      Float?  // informational: allocation / commitmentAmount
+  createdAt            DateTime @default(now())
+
+  distributionEvent PMFundDistributionEvent @relation(fields: [distributionEventId], references: [id], onDelete: Cascade)
+  commitment        ClientCommitment        @relation(fields: [clientCommitmentId], references: [id], onDelete: Cascade)
+
+  @@unique([distributionEventId, clientCommitmentId])
+}
+
+model PMFundKpiPoint {
+  id      String   @id @default(cuid())
+  fundId  String
+  kpiDate DateTime
+  tvpi    Float    // Total Value to Paid-In
+  rvpi    Float    // Residual Value to Paid-In
+  dpi     Float    // Distributions to Paid-In
+  moic    Float    // Multiple on Invested Capital
+  createdAt DateTime @default(now())
+
+  fund PMFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@index([fundId, kpiDate])
 }
 
 model PMFund {
@@ -328,10 +429,15 @@ model PMFund {
   fundTermMonths         Int?
   createdAt              DateTime       @default(now())
 
-  approvals   PMFundApproval[]
-  profile     PMFundProfile?
-  truth       PMFundTruth?
-  commitments ClientCommitment[]
+  approvals           PMFundApproval[]
+  profile             PMFundProfile?
+  truth               PMFundTruth?
+  commitments         ClientCommitment[]
+  closes              PMFundClose[]
+  navPoints           PMFundNAVPoint[]
+  cashflowEvents      PMFundCashflowEvent[]
+  distributionEvents  PMFundDistributionEvent[]
+  kpiPoints           PMFundKpiPoint[]
 }
 
 model PMFundProfile {
@@ -526,9 +632,10 @@ model ClientCommitment {
   sleeve ClientSleeve @relation(fields: [clientSleeveId], references: [id], onDelete: Cascade)
   fund   PMFund       @relation(fields: [fundId], references: [id])
 
-  cashflowEvents ClientFundCashflowEvent[]
-  navPoints      ClientFundNAVPoint[]
-  scenario       ClientCommitmentScenario?
+  cashflowEvents          ClientFundCashflowEvent[]
+  navPoints               ClientFundNAVPoint[]
+  scenario                ClientCommitmentScenario?
+  distributionAllocations PMFundDistributionAllocation[]
 }
 
 model ClientFundCashflowEvent {
@@ -700,6 +807,7 @@ model CMASet {
   isDefault       Boolean      @default(false)
   status          CMASetStatus @default(DRAFT)
   effectiveDate   DateTime?
+  riskFreeRatePct Float        @default(0.03) // annual, e.g. 0.03 for 3%
   wealthGroupId   String?
   createdByUserId String
   createdAt       DateTime     @default(now())
@@ -717,6 +825,7 @@ model CMAAssumption {
   taxonomyNodeId  String
   expReturnPct    Float  // e.g. 0.08 for 8%
   volPct          Float  // e.g. 0.15 for 15%
+  incomeYieldPct  Float  @default(0) // annual income/yield, e.g. 0.04 for 4%
 
   cmaSet CMASet       @relation(fields: [cmaSetId], references: [id], onDelete: Cascade)
   node   TaxonomyNode @relation(fields: [taxonomyNodeId], references: [id])

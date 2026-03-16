@@ -32,7 +32,7 @@ import { SAASelector } from "./saa-selector";
 import { DriftView } from "./drift-view";
 import { CreateSleeveForm, SleeveSummary } from "./sleeve-view";
 import { RebalanceGenerateButton, RebalancePlanCard } from "./rebalance-view";
-import { computeExpectedOutcomes, type CMAInput, type WeightInput } from "@/lib/cma";
+import { computeExpectedOutcomes, computeHorizonOutcomes, type CMAInput, type WeightInput } from "@/lib/cma";
 import { ExpectedOutcomesView } from "./expected-outcomes-view";
 import {
   buildLiquidityLadder,
@@ -716,7 +716,9 @@ async function ExpectedOutcomesSection({
     nodeId: a.taxonomyNodeId,
     expReturnPct: a.expReturnPct,
     volPct: a.volPct,
+    incomeYieldPct: a.incomeYieldPct,
   }));
+  const riskFreeRatePct = effectiveCMA.riskFreeRatePct;
 
   // Get taxonomy + mappings for allocation computation
   const taxonomy = await prisma.taxonomy.findFirst({
@@ -803,10 +805,15 @@ async function ExpectedOutcomesSection({
     })),
   );
 
-  const portfolioResult = computeExpectedOutcomes(currentWeights, cmaInputs);
+  const portfolioResult = computeExpectedOutcomes(currentWeights, cmaInputs, riskFreeRatePct);
+  const portfolioHorizons = computeHorizonOutcomes(
+    portfolioResult.expectedReturnPct,
+    portfolioResult.expectedIncomePct,
+  );
 
   // Compute SAA expected outcomes if assigned
   let saaResult = null;
+  let saaHorizons = null;
   let saaName: string | null = null;
 
   const clientSAA = await prisma.clientSAA.findUnique({
@@ -826,7 +833,11 @@ async function ExpectedOutcomesSection({
       nodeName: a.node.name,
       weight: a.targetWeight,
     }));
-    saaResult = computeExpectedOutcomes(saaWeights, cmaInputs);
+    saaResult = computeExpectedOutcomes(saaWeights, cmaInputs, riskFreeRatePct);
+    saaHorizons = computeHorizonOutcomes(
+      saaResult.expectedReturnPct,
+      saaResult.expectedIncomePct,
+    );
   }
 
   // Compare with firm default (if client has a non-default selection)
@@ -839,10 +850,12 @@ async function ExpectedOutcomesSection({
       nodeId: a.taxonomyNodeId,
       expReturnPct: a.expReturnPct,
       volPct: a.volPct,
+      incomeYieldPct: a.incomeYieldPct,
     }));
-    compareResult = computeExpectedOutcomes(currentWeights, defaultInputs);
+    const defaultRf = defaultCMA.riskFreeRatePct;
+    compareResult = computeExpectedOutcomes(currentWeights, defaultInputs, defaultRf);
     if (saaWeights.length > 0) {
-      compareSaaResult = computeExpectedOutcomes(saaWeights, defaultInputs);
+      compareSaaResult = computeExpectedOutcomes(saaWeights, defaultInputs, defaultRf);
     }
   }
 
@@ -862,7 +875,9 @@ async function ExpectedOutcomesSection({
           isDefault: s.isDefault,
         }))}
         portfolioResult={portfolioResult}
+        portfolioHorizons={portfolioHorizons}
         saaResult={saaResult}
+        saaHorizons={saaHorizons}
         saaName={saaName}
         cmaSetName={effectiveCMA.name}
         compareResult={compareResult}
