@@ -1,11 +1,12 @@
 /**
- * Seeds liquidity profiles, taxonomy defaults, and product overrides.
+ * Seeds liquidity profiles, taxonomy defaults, product overrides, and adviser overrides.
  */
 import { PrismaClient } from "../src/generated/prisma/client";
 import { TaxonomyNodeType } from "../src/generated/prisma/enums";
 
 export async function seedLiquidityProfiles(prisma: PrismaClient) {
   // Clean up existing data
+  await prisma.adviserLiquidityOverride.deleteMany();
   await prisma.productLiquidityOverride.deleteMany();
   await prisma.taxonomyLiquidityDefault.deleteMany();
   await prisma.liquidityProfile.deleteMany();
@@ -33,7 +34,7 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
     },
   });
 
-  const fundSemiLiquid = await prisma.liquidityProfile.create({
+  await prisma.liquidityProfile.create({
     data: {
       id: "lp-fund-semi",
       tier: "FUND_SEMI_LIQUID",
@@ -42,10 +43,11 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
       noticeDays: 30,
       redeemFrequency: "Quarterly",
       gatePctPerPeriod: 0.25,
+      gatePeriodDays: 90,
     },
   });
 
-  const privateTier = await prisma.liquidityProfile.create({
+  await prisma.liquidityProfile.create({
     data: {
       id: "lp-private",
       tier: "PRIVATE",
@@ -68,8 +70,22 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
     },
   });
 
+  // Gated product profile: 10% per 90 days gate
+  const gatedProfile = await prisma.liquidityProfile.create({
+    data: {
+      id: "lp-gated-10-90",
+      tier: "FUND_SEMI_LIQUID",
+      horizonDays: 90,
+      stressedHaircutPct: 0.10,
+      noticeDays: 15,
+      redeemFrequency: "Quarterly",
+      gatePctPerPeriod: 0.10,
+      gatePeriodDays: 90,
+      gateOrSuspendRisk: true,
+    },
+  });
+
   // ── Taxonomy defaults ──
-  // Find taxonomy nodes for asset classes
   const taxonomy = await prisma.taxonomy.findFirst({
     where: { name: "Default SAA Taxonomy" },
     include: { nodes: true },
@@ -85,8 +101,6 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
   );
 
   for (const node of assetClassNodes) {
-    // Australian Equities / International Equities → listed
-    // Fixed Income → fund liquid
     let profileId = listedT2.id;
     if (node.name.includes("Fixed Income")) {
       profileId = fundLiquid.id;
@@ -100,12 +114,10 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
     });
   }
 
-  // Also set defaults for risk bucket nodes as fallback
   const riskNodes = taxonomy.nodes.filter(
     (n) => n.nodeType === TaxonomyNodeType.RISK,
   );
   for (const node of riskNodes) {
-    // Growth → listed, Defensive → fund liquid
     const profileId = node.name === "Defensive" ? fundLiquid.id : listedT2.id;
     await prisma.taxonomyLiquidityDefault.create({
       data: {
@@ -115,8 +127,7 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
     });
   }
 
-  // ── Product overrides ──
-  // Override managed portfolios as fund-liquid (30d) and one fund as semi-liquid
+  // ── Product overrides (platform truth) ──
 
   await prisma.productLiquidityOverride.create({
     data: {
@@ -126,10 +137,11 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
     },
   });
 
+  // prod-f2 gets the gated profile (10% per 90 days) — platform truth
   await prisma.productLiquidityOverride.create({
     data: {
       productId: "prod-f2",
-      liquidityProfileId: fundSemiLiquid.id,
+      liquidityProfileId: gatedProfile.id,
       source: "PLATFORM_SUPER_ADMIN",
     },
   });
@@ -143,8 +155,51 @@ export async function seedLiquidityProfiles(prisma: PrismaClient) {
     },
   });
 
+  // ── Adviser override ──
+  // Find the first adviser and override a product from Listed to Semi-liquid
+  const adviser = await prisma.adviser.findFirst();
+  if (adviser) {
+    // Create a semi-liquid profile for the adviser override
+    const adviserSemiProfile = await prisma.liquidityProfile.create({
+      data: {
+        id: "lp-adviser-semi",
+        tier: "FUND_SEMI_LIQUID",
+        horizonDays: 90,
+        stressedHaircutPct: 0.08,
+        noticeDays: 20,
+        redeemFrequency: "Monthly",
+        gatePctPerPeriod: 0.15,
+        gatePeriodDays: 30,
+      },
+    });
+
+    // Find a product without a platform override to apply adviser override
+    // Use a listed equity product (e.g. prod-eq1 or a fund without platform override)
+    const productsWithoutPlatformOverride = await prisma.product.findMany({
+      where: {
+        liquidityOverride: null,
+        type: { not: "MANAGED_PORTFOLIO" },
+      },
+      take: 1,
+    });
+
+    if (productsWithoutPlatformOverride.length > 0) {
+      const targetProduct = productsWithoutPlatformOverride[0];
+      await prisma.adviserLiquidityOverride.create({
+        data: {
+          adviserId: adviser.id,
+          productId: targetProduct.id,
+          liquidityProfileId: adviserSemiProfile.id,
+        },
+      });
+      console.log(
+        `Created adviser override: ${targetProduct.name} changed to FUND_SEMI_LIQUID (gate 15% per 30d)`,
+      );
+    }
+  }
+
   const defaultCount = assetClassNodes.length + riskNodes.length;
   console.log(
-    `Created 5 liquidity profiles, ${defaultCount} taxonomy defaults, 3 product overrides (incl. 1 LOCKED+gated)`,
+    `Created 7 liquidity profiles, ${defaultCount} taxonomy defaults, 3 product overrides (incl. 1 gated 10%/90d), adviser override`,
   );
 }

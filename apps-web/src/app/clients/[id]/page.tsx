@@ -138,7 +138,7 @@ export default async function ClientDetailPage({
             ))}
 
             <AllocationSection accounts={client.accounts} clientId={id} />
-            <LiquidityLadderSection accounts={client.accounts} clientId={id} />
+            <LiquidityLadderSection accounts={client.accounts} clientId={id} adviserId={client.adviserId} />
             <LiquidityStressSection clientId={id} />
             <SAASection clientId={id} accounts={client.accounts} />
             <ExpectedOutcomesSection clientId={id} accounts={client.accounts} />
@@ -257,6 +257,7 @@ async function AllocationSection({
 async function LiquidityLadderSection({
   accounts,
   clientId,
+  adviserId,
 }: {
   accounts: {
     holdings: {
@@ -272,6 +273,7 @@ async function LiquidityLadderSection({
     }[];
   }[];
   clientId: string;
+  adviserId: string;
 }) {
   // Fetch taxonomy, mappings, overrides, and defaults
   const taxonomy = await prisma.taxonomy.findFirst({
@@ -289,7 +291,7 @@ async function LiquidityLadderSection({
     orderBy: { createdAt: "asc" },
   });
 
-  // Fetch product overrides
+  // Fetch product overrides (platform truth)
   const productOverridesRaw = await prisma.productLiquidityOverride.findMany({
     include: { profile: true },
   });
@@ -301,6 +303,29 @@ async function LiquidityLadderSection({
         horizonDays: o.profile.horizonDays,
         stressedHaircutPct: o.profile.stressedHaircutPct,
         gateOrSuspendRisk: o.profile.gateOrSuspendRisk,
+        noticeDays: o.profile.noticeDays,
+        gatePctPerPeriod: o.profile.gatePctPerPeriod,
+        gatePeriodDays: o.profile.gatePeriodDays,
+      },
+    ]),
+  );
+
+  // Fetch adviser overrides for this client's adviser
+  const adviserOverridesRaw = await prisma.adviserLiquidityOverride.findMany({
+    where: { adviserId },
+    include: { profile: true },
+  });
+  const adviserOverrides = new Map<string, LiquidityProfileData>(
+    adviserOverridesRaw.map((o) => [
+      o.productId,
+      {
+        tier: o.profile.tier,
+        horizonDays: o.profile.horizonDays,
+        stressedHaircutPct: o.profile.stressedHaircutPct,
+        gateOrSuspendRisk: o.profile.gateOrSuspendRisk,
+        noticeDays: o.profile.noticeDays,
+        gatePctPerPeriod: o.profile.gatePctPerPeriod,
+        gatePeriodDays: o.profile.gatePeriodDays,
       },
     ]),
   );
@@ -317,6 +342,9 @@ async function LiquidityLadderSection({
         horizonDays: d.profile.horizonDays,
         stressedHaircutPct: d.profile.stressedHaircutPct,
         gateOrSuspendRisk: d.profile.gateOrSuspendRisk,
+        noticeDays: d.profile.noticeDays,
+        gatePctPerPeriod: d.profile.gatePctPerPeriod,
+        gatePeriodDays: d.profile.gatePeriodDays,
       },
     ]),
   );
@@ -372,6 +400,7 @@ async function LiquidityLadderSection({
     overrides,
     taxonomyDefaults,
     nodes,
+    adviserOverrides,
   );
 
   return (

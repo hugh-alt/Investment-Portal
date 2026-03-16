@@ -52,10 +52,11 @@ model Adviser {
   wealthGroupId  String?
   createdAt      DateTime @default(now())
 
-  user         User          @relation(fields: [userId], references: [id])
-  wealthGroup  WealthGroup?  @relation(fields: [wealthGroupId], references: [id])
-  clients      Client[]
-  saas         SAA[]
+  user                   User                      @relation(fields: [userId], references: [id])
+  wealthGroup            WealthGroup?              @relation(fields: [wealthGroupId], references: [id])
+  clients                Client[]
+  saas                   SAA[]
+  liquidityOverrides     AdviserLiquidityOverride[]
 }
 
 model Client {
@@ -116,7 +117,8 @@ model Product {
   recommendationLegs    SleeveRecommendationLeg[]
   orders                Order[]
   rebalanceTrades       RebalanceTrade[]
-  liquidityOverride     ProductLiquidityOverride?
+  liquidityOverride        ProductLiquidityOverride?
+  adviserLiquidityOverrides AdviserLiquidityOverride[]
 }
 
 model Holding {
@@ -754,12 +756,14 @@ model LiquidityProfile {
   noticeDays         Int?
   redeemFrequency    String?       // e.g. "Daily", "Monthly", "Quarterly"
   gatePctPerPeriod   Float?        // e.g. 0.25 for 25%
+  gatePeriodDays     Int?          // e.g. 90
   gateOrSuspendRisk  Boolean       @default(false)
   lockupEndDate      DateTime?
   createdAt          DateTime      @default(now())
 
-  taxonomyDefaults  TaxonomyLiquidityDefault[]
-  productOverrides  ProductLiquidityOverride[]
+  taxonomyDefaults    TaxonomyLiquidityDefault[]
+  productOverrides    ProductLiquidityOverride[]
+  adviserOverrides    AdviserLiquidityOverride[]
 }
 
 model TaxonomyLiquidityDefault {
@@ -785,6 +789,20 @@ model ProductLiquidityOverride {
 
   product Product          @relation(fields: [productId], references: [id])
   profile LiquidityProfile @relation(fields: [liquidityProfileId], references: [id], onDelete: Cascade)
+}
+
+model AdviserLiquidityOverride {
+  id                 String   @id @default(cuid())
+  adviserId          String
+  productId          String
+  liquidityProfileId String
+  createdAt          DateTime @default(now())
+
+  adviser Adviser          @relation(fields: [adviserId], references: [id], onDelete: Cascade)
+  product Product          @relation(fields: [productId], references: [id])
+  profile LiquidityProfile @relation(fields: [liquidityProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([adviserId, productId])
 }
 
 // ── Liquidity Stress Testing ────────────────────────────

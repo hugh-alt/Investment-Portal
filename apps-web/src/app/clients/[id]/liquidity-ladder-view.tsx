@@ -8,20 +8,32 @@ const fmt = (v: number) =>
 
 const SOURCE_COLORS: Record<string, string> = {
   PRODUCT_OVERRIDE: "bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+  ADVISER_OVERRIDE: "bg-purple-50 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
   TAXONOMY_DEFAULT: "bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300",
   ASSUMED: "bg-yellow-50 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  PRODUCT_OVERRIDE: "Platform",
+  ADVISER_OVERRIDE: "Adviser",
+  TAXONOMY_DEFAULT: "Taxonomy",
+  ASSUMED: "Assumed",
 };
 
 type ExposureRow = {
   productId: string;
   productName: string;
   marketValue: number;
+  maxLiquidatablePct: number;
   profile: {
     tier: string;
     horizonDays: number;
     stressedHaircutPct: number;
     gateOrSuspendRisk: boolean;
     source: string;
+    noticeDays?: number | null;
+    gatePctPerPeriod?: number | null;
+    gatePeriodDays?: number | null;
   };
 };
 
@@ -70,6 +82,7 @@ export function LiquidityLadderView({
             <th className="pb-2 text-right font-medium text-zinc-500">% of portfolio</th>
             <th className="pb-2 text-right font-medium text-zinc-500">Cumulative</th>
             <th className="pb-2 text-right font-medium text-zinc-500">Cum. %</th>
+            <th className="pb-2 text-right font-medium text-zinc-500">Max liq. %</th>
             <th className="pb-2 text-right font-medium text-zinc-500">Gated</th>
           </tr>
         </thead>
@@ -95,6 +108,15 @@ export function LiquidityLadderView({
                 {pct(b.cumulativePct)}
               </td>
               <td className="py-2 text-right">
+                {b.maxLiquidatablePct < 1 ? (
+                  <span className="rounded bg-orange-50 px-1.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-900 dark:text-orange-300">
+                    {pct(b.maxLiquidatablePct)}
+                  </span>
+                ) : (
+                  <span className="text-zinc-400">{pct(b.maxLiquidatablePct)}</span>
+                )}
+              </td>
+              <td className="py-2 text-right">
                 {b.gatedCount > 0 ? (
                   <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900 dark:text-red-300">
                     {b.gatedCount}
@@ -112,7 +134,7 @@ export function LiquidityLadderView({
             <td className="py-2 text-right font-medium text-zinc-900 dark:text-zinc-100">
               {fmt(totalPortfolioValue)}
             </td>
-            <td colSpan={5} />
+            <td colSpan={6} />
           </tr>
         </tfoot>
       </table>
@@ -129,6 +151,7 @@ export function LiquidityLadderView({
               <th className="pb-1 font-medium text-zinc-500">Tier</th>
               <th className="pb-1 text-right font-medium text-zinc-500">Horizon</th>
               <th className="pb-1 text-right font-medium text-zinc-500">Haircut</th>
+              <th className="pb-1 text-right font-medium text-zinc-500">Max liq.</th>
               <th className="pb-1 font-medium text-zinc-500">Source</th>
               <th className="pb-1 font-medium text-zinc-500">Risk</th>
             </tr>
@@ -143,9 +166,16 @@ export function LiquidityLadderView({
                 </td>
                 <td className="py-1 text-right text-zinc-600 dark:text-zinc-400">{e.profile.horizonDays}d</td>
                 <td className="py-1 text-right text-zinc-600 dark:text-zinc-400">{pct(e.profile.stressedHaircutPct)}</td>
+                <td className="py-1 text-right">
+                  {e.maxLiquidatablePct < 1 ? (
+                    <span className="text-orange-600 dark:text-orange-400 font-medium">{pct(e.maxLiquidatablePct)}</span>
+                  ) : (
+                    <span className="text-zinc-400">{pct(e.maxLiquidatablePct)}</span>
+                  )}
+                </td>
                 <td className="py-1">
                   <span className={`rounded px-1 py-0.5 text-xs ${SOURCE_COLORS[e.profile.source] ?? ""}`}>
-                    {e.profile.source === "PRODUCT_OVERRIDE" ? "Override" : e.profile.source === "TAXONOMY_DEFAULT" ? "Taxonomy" : "Assumed"}
+                    {SOURCE_LABELS[e.profile.source] ?? e.profile.source}
                   </span>
                 </td>
                 <td className="py-1">

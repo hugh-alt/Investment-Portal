@@ -6,7 +6,7 @@
  */
 
 import type { LiquidityProfileData, ProductMapping, TaxonomyNode, ExposureInput } from "./liquidity-profile";
-import { resolveProfile } from "./liquidity-profile";
+import { resolveProfile, computeGatedAvailableValue } from "./liquidity-profile";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -56,12 +56,11 @@ export type ClientStressResult = {
   worstCoverage90d: number;
 };
 
-// ── Available liquidity (stressed) ────────────────────────
+// ── Available liquidity (stressed + gating-adjusted) ─────
 
 /**
  * Compute cumulative stressed liquidity available within a given horizon.
- * An exposure is available if its profile horizonDays <= scenarioHorizonDays
- * (LOCKED tier excluded unless horizonDays fits).
+ * Now applies gating mechanics: notice delays and gate fraction limits.
  */
 export function computeAvailableLiquidity(
   exposures: ExposureInput[],
@@ -70,17 +69,12 @@ export function computeAvailableLiquidity(
   taxonomyDefaults: Map<string, LiquidityProfileData>,
   nodes: Map<string, TaxonomyNode>,
   scenarioHorizonDays: number,
+  adviserOverrides?: Map<string, LiquidityProfileData>,
 ): number {
   let available = 0;
   for (const exp of exposures) {
-    const profile = resolveProfile(exp.productId, productMappings, overrides, taxonomyDefaults, nodes);
-    // LOCKED tier: only available if horizonDays fits (unlikely for 30/90/365)
-    if (profile.tier === "LOCKED" && profile.horizonDays > scenarioHorizonDays) {
-      continue;
-    }
-    if (profile.horizonDays <= scenarioHorizonDays) {
-      available += exp.marketValue * (1 - profile.stressedHaircutPct);
-    }
+    const profile = resolveProfile(exp.productId, productMappings, overrides, taxonomyDefaults, nodes, adviserOverrides);
+    available += computeGatedAvailableValue(exp.marketValue, profile, scenarioHorizonDays);
   }
   return available;
 }
@@ -89,7 +83,7 @@ export function computeAvailableLiquidity(
 
 /**
  * Compute PM call $ within a given horizon (months).
- * Horizon 30d ≈ 1 month, 90d ≈ 3 months, 365d ≈ 12 months.
+ * Horizon 30d ~= 1 month, 90d ~= 3 months, 365d ~= 12 months.
  */
 export function horizonToMonths(horizonDays: number): number {
   return Math.ceil(horizonDays / 30);
@@ -202,13 +196,14 @@ export function computeClientStress(
   rules: StressRule[],
   pmCalls: PMCallInput[],
   buffer: BufferInput | null,
+  adviserOverrides?: Map<string, LiquidityProfileData>,
 ): ClientStressResult {
   const totalPortfolioValue = exposures.reduce((s, e) => s + e.marketValue, 0);
 
   const horizons: StressHorizonResult[] = rules.map((rule) => {
     const available = computeAvailableLiquidity(
       exposures, productMappings, overrides, taxonomyDefaults, nodes,
-      rule.horizonDays,
+      rule.horizonDays, adviserOverrides,
     );
 
     const { required, pmCallsAUD, bufferReq, foreignCalls } = computeRequiredLiquidity(

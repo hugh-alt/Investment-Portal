@@ -10,9 +10,17 @@ export type LiquidityProfileData = {
   horizonDays: number;
   stressedHaircutPct: number;
   gateOrSuspendRisk: boolean;
+  noticeDays?: number | null;
+  gatePctPerPeriod?: number | null;
+  gatePeriodDays?: number | null;
 };
 
 export type ProductOverride = {
+  productId: string;
+  profile: LiquidityProfileData;
+};
+
+export type AdviserOverride = {
   productId: string;
   profile: LiquidityProfileData;
 };
@@ -33,7 +41,7 @@ export type ProductMapping = {
 };
 
 export type ResolvedProfile = LiquidityProfileData & {
-  source: "PRODUCT_OVERRIDE" | "TAXONOMY_DEFAULT" | "ASSUMED";
+  source: "PRODUCT_OVERRIDE" | "ADVISER_OVERRIDE" | "TAXONOMY_DEFAULT" | "ASSUMED";
 };
 
 export type ExposureInput = {
@@ -51,6 +59,7 @@ export type LadderBucket = {
   cumulativeStressedValue: number;
   cumulativePct: number;
   gatedCount: number;
+  maxLiquidatablePct: number;
 };
 
 export type LiquidityLadderResult = {
@@ -63,8 +72,65 @@ export type LiquidityLadderResult = {
     productName: string;
     marketValue: number;
     profile: ResolvedProfile;
+    maxLiquidatablePct: number;
   }[];
 };
+
+// ── Gating Mechanics ─────────────────────────────────────
+
+/**
+ * Compute the max liquidatable fraction for a given horizon,
+ * considering noticeDays and gating limits.
+ * Returns a value between 0 and 1.
+ */
+export function computeMaxLiquidatableFraction(
+  profile: LiquidityProfileData,
+  horizonDays: number,
+): number {
+  if (profile.tier === "LOCKED" && profile.horizonDays > horizonDays) {
+    return 0;
+  }
+  if (profile.horizonDays > horizonDays) {
+    return 0;
+  }
+
+  // Determine effective horizon after notice period
+  let effectiveHorizon = horizonDays;
+  if (profile.noticeDays && profile.noticeDays > 0) {
+    effectiveHorizon = horizonDays - profile.noticeDays;
+    if (effectiveHorizon <= 0) {
+      return 0;
+    }
+  }
+
+  // Apply gate limit if gatePctPerPeriod and gatePeriodDays are set
+  if (
+    profile.gatePctPerPeriod != null &&
+    profile.gatePctPerPeriod > 0 &&
+    profile.gatePeriodDays != null &&
+    profile.gatePeriodDays > 0
+  ) {
+    const periods = Math.floor(effectiveHorizon / profile.gatePeriodDays);
+    if (periods <= 0) return 0;
+    return Math.min(1, profile.gatePctPerPeriod * periods);
+  }
+
+  // No gating — 100% available
+  return 1;
+}
+
+/**
+ * Compute gating-adjusted available value for an exposure at a given horizon.
+ */
+export function computeGatedAvailableValue(
+  marketValue: number,
+  profile: LiquidityProfileData,
+  horizonDays: number,
+): number {
+  const stressedValue = marketValue * (1 - profile.stressedHaircutPct);
+  const fraction = computeMaxLiquidatableFraction(profile, horizonDays);
+  return stressedValue * fraction;
+}
 
 // ── Resolution ────────────────────────────────────────────
 
@@ -77,7 +143,7 @@ const FALLBACK_PROFILE: LiquidityProfileData = {
 
 /**
  * Resolve the effective liquidity profile for a product.
- * Priority: product override → taxonomy default (walk up parents) → fallback.
+ * Priority: platform override → adviser override → taxonomy default (walk up parents) → fallback.
  */
 export function resolveProfile(
   productId: string,
@@ -85,14 +151,23 @@ export function resolveProfile(
   overrides: Map<string, LiquidityProfileData>,
   taxonomyDefaults: Map<string, LiquidityProfileData>,
   nodes: Map<string, TaxonomyNode>,
+  adviserOverrides?: Map<string, LiquidityProfileData>,
 ): ResolvedProfile {
-  // 1. Product override
+  // 1. Platform product override (highest priority)
   const override = overrides.get(productId);
   if (override) {
     return { ...override, source: "PRODUCT_OVERRIDE" };
   }
 
-  // 2. Taxonomy default — find mapping, walk up tree
+  // 2. Adviser override
+  if (adviserOverrides) {
+    const advOverride = adviserOverrides.get(productId);
+    if (advOverride) {
+      return { ...advOverride, source: "ADVISER_OVERRIDE" };
+    }
+  }
+
+  // 3. Taxonomy default — find mapping, walk up tree
   const mapping = productMappings.find((m) => m.productId === productId);
   if (mapping) {
     let nodeId: string | null = mapping.nodeId;
@@ -106,7 +181,7 @@ export function resolveProfile(
     }
   }
 
-  // 3. Fallback
+  // 4. Fallback
   return { ...FALLBACK_PROFILE, source: "ASSUMED" };
 }
 
@@ -122,7 +197,7 @@ const HORIZON_BUCKETS = [
 
 /**
  * Build a liquidity ladder for a set of product exposures.
- * Groups exposures into horizon buckets, applies haircuts.
+ * Groups exposures into horizon buckets, applies haircuts and gating.
  */
 export function buildLiquidityLadder(
   exposures: ExposureInput[],
@@ -130,6 +205,7 @@ export function buildLiquidityLadder(
   overrides: Map<string, LiquidityProfileData>,
   taxonomyDefaults: Map<string, LiquidityProfileData>,
   nodes: Map<string, TaxonomyNode>,
+  adviserOverrides?: Map<string, LiquidityProfileData>,
 ): LiquidityLadderResult {
   const totalPortfolioValue = exposures.reduce((s, e) => s + e.marketValue, 0);
   if (totalPortfolioValue === 0) {
@@ -139,7 +215,7 @@ export function buildLiquidityLadder(
   let assumedCount = 0;
   let gatedCount = 0;
   const resolvedExposures = exposures.map((e) => {
-    const profile = resolveProfile(e.productId, productMappings, overrides, taxonomyDefaults, nodes);
+    const profile = resolveProfile(e.productId, productMappings, overrides, taxonomyDefaults, nodes, adviserOverrides);
     if (profile.source === "ASSUMED") assumedCount++;
     if (profile.gateOrSuspendRisk) gatedCount++;
     return { ...e, profile };
@@ -151,12 +227,12 @@ export function buildLiquidityLadder(
     grossValue: 0,
     stressedValue: 0,
     gatedCount: 0,
+    gatedAdjustedValue: 0,
   }));
 
   for (const exp of resolvedExposures) {
     const hz = exp.profile.horizonDays;
     const isLocked = exp.profile.tier === "LOCKED";
-    // LOCKED always goes to the locked bucket (last); otherwise find first bucket >= horizonDays
     let bucketIdx: number;
     if (isLocked) {
       bucketIdx = bucketTotals.length - 1;
@@ -169,9 +245,17 @@ export function buildLiquidityLadder(
         }
       }
     }
+    const stressedVal = exp.marketValue * (1 - exp.profile.stressedHaircutPct);
     bucketTotals[bucketIdx].grossValue += exp.marketValue;
-    bucketTotals[bucketIdx].stressedValue +=
-      exp.marketValue * (1 - exp.profile.stressedHaircutPct);
+    bucketTotals[bucketIdx].stressedValue += stressedVal;
+
+    // Compute gating-adjusted value for this bucket's horizon
+    const bucketHorizon = bucketTotals[bucketIdx].horizonDays === Infinity
+      ? 99999
+      : bucketTotals[bucketIdx].horizonDays;
+    const fraction = computeMaxLiquidatableFraction(exp.profile, bucketHorizon);
+    bucketTotals[bucketIdx].gatedAdjustedValue += stressedVal * fraction;
+
     if (exp.profile.gateOrSuspendRisk) {
       bucketTotals[bucketIdx].gatedCount++;
     }
@@ -189,6 +273,34 @@ export function buildLiquidityLadder(
       cumulativeStressedValue: cumulativeStressed,
       cumulativePct: cumulativeStressed / totalPortfolioValue,
       gatedCount: b.gatedCount,
+      maxLiquidatablePct: b.stressedValue > 0 ? b.gatedAdjustedValue / b.stressedValue : 1,
+    };
+  });
+
+  // Compute per-exposure max liquidatable % at their bucket horizon
+  const exposureResults = resolvedExposures.map((e) => {
+    const hz = e.profile.horizonDays;
+    const isLocked = e.profile.tier === "LOCKED";
+    let bucketHorizon: number;
+    if (isLocked) {
+      bucketHorizon = 99999;
+    } else {
+      bucketHorizon = Infinity;
+      for (let i = 0; i < HORIZON_BUCKETS.length - 1; i++) {
+        if (hz <= HORIZON_BUCKETS[i].horizonDays) {
+          bucketHorizon = HORIZON_BUCKETS[i].horizonDays;
+          break;
+        }
+      }
+      if (bucketHorizon === Infinity) bucketHorizon = 99999;
+    }
+    const fraction = computeMaxLiquidatableFraction(e.profile, bucketHorizon);
+    return {
+      productId: e.productId,
+      productName: e.productName,
+      marketValue: e.marketValue,
+      profile: e.profile,
+      maxLiquidatablePct: fraction,
     };
   });
 
@@ -197,7 +309,7 @@ export function buildLiquidityLadder(
     totalPortfolioValue,
     assumedCount,
     gatedCount,
-    exposures: resolvedExposures,
+    exposures: exposureResults,
   };
 }
 

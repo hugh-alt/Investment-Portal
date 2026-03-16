@@ -36,7 +36,6 @@ describe("horizonToMonths", () => {
 
 describe("computeAvailableLiquidity", () => {
   it("includes only exposures with horizonDays <= scenario horizon", () => {
-    // 30d: only listed (2d) and fund-liquid (30d)
     const avail30 = computeAvailableLiquidity(exposures, productMappings, overrides, taxonomyDefaults, nodes, 30);
     // Listed: 500k * 0.98 = 490k, Fund: 300k * 0.95 = 285k
     expect(avail30).toBeCloseTo(490_000 + 285_000, 0);
@@ -44,14 +43,34 @@ describe("computeAvailableLiquidity", () => {
 
   it("includes private at 365d horizon", () => {
     const avail365 = computeAvailableLiquidity(exposures, productMappings, overrides, taxonomyDefaults, nodes, 365);
-    // Listed + Fund + Private (150k * 0.80 = 120k)
     expect(avail365).toBeCloseTo(490_000 + 285_000 + 120_000, 0);
   });
 
   it("excludes LOCKED tier when horizon < lockup", () => {
     const avail365 = computeAvailableLiquidity(exposures, productMappings, overrides, taxonomyDefaults, nodes, 365);
-    // Locked has 730d > 365d, excluded
     expect(avail365).toBeCloseTo(895_000, 0);
+  });
+
+  it("reduces available liquidity for gated assets", () => {
+    const gatedOverrides = new Map<string, LiquidityProfileData>([
+      ["prod-gated", {
+        tier: "FUND_SEMI_LIQUID",
+        horizonDays: 30,
+        stressedHaircutPct: 0.10,
+        gateOrSuspendRisk: true,
+        gatePctPerPeriod: 0.10,
+        gatePeriodDays: 90,
+      }],
+    ]);
+    const gatedExposures: ExposureInput[] = [
+      { productId: "prod-gated", productName: "Gated Fund", marketValue: 100_000 },
+    ];
+    // At 30d: fraction = floor(30/90)*0.10 = 0 → available = 0
+    const avail30 = computeAvailableLiquidity(gatedExposures, [], gatedOverrides, new Map(), nodes, 30);
+    expect(avail30).toBe(0);
+    // At 90d: fraction = floor(90/90)*0.10 = 0.10 → 90k * 0.10 = 9k
+    const avail90 = computeAvailableLiquidity(gatedExposures, [], gatedOverrides, new Map(), nodes, 90);
+    expect(avail90).toBeCloseTo(9_000);
   });
 });
 
@@ -97,14 +116,12 @@ describe("computeRequiredLiquidity", () => {
       projectedCallsAUD: 0,
     };
     const result = computeRequiredLiquidity(rule, 1_000_000, calls, buffer);
-    // 50k calls + 20k buffer
     expect(result.required).toBe(70_000);
   });
 
   it("includes extra demand pct", () => {
     const ruleWithExtra: StressRule = { horizonDays: 30, extraCashDemandPct: 0.05, extraCashDemandAmount: 0 };
     const result = computeRequiredLiquidity(ruleWithExtra, 1_000_000, calls, null);
-    // 50k calls + 50k (5% of 1M)
     expect(result.required).toBe(100_000);
   });
 
@@ -121,7 +138,6 @@ describe("computeRequiredLiquidity", () => {
     ];
     const result = computeRequiredLiquidity(rule, 1_000_000, mixedCalls, null);
     expect(result.foreignCalls).toEqual([{ currency: "USD", amount: 10_000 }]);
-    // Foreign calls NOT included in required (AUD-only)
     expect(result.required).toBe(50_000);
   });
 });
@@ -146,7 +162,6 @@ describe("computeClientStress", () => {
   });
 
   it("returns CRITICAL when required >> available at 30d", () => {
-    // Available at 30d ≈ 775k. Need > 775/0.8 ≈ 969k for CRITICAL
     const hugeCalls: PMCallInput[] = [
       { currency: "AUD", month: "2026-04", amount: 1_200_000 },
     ];
@@ -160,7 +175,6 @@ describe("computeClientStress", () => {
   });
 
   it("returns WARN when coverage between 0.8 and 1.0", () => {
-    // Available at 30d ≈ 775k. Need ~850k for WARN
     const calls: PMCallInput[] = [
       { currency: "AUD", month: "2026-04", amount: 850_000 },
     ];
@@ -202,7 +216,7 @@ describe("buildLiquidityStressGovRows", () => {
       { clientId: "c1", clientName: "Bad", adviserName: "A", adviserId: "a1", stress: stress1 },
     ]);
 
-    expect(rows[0].clientId).toBe("c1"); // worst coverage first
+    expect(rows[0].clientId).toBe("c1");
     expect(rows[0].worstStatus).toBe("CRITICAL");
     expect(rows[1].clientId).toBe("c2");
     expect(rows[1].worstStatus).toBe("OK");
