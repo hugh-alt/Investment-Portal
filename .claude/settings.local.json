@@ -17,7 +17,8 @@
       "Bash(docker exec:*)",
       "Bash(rm:*)",
       "Bash(curl:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cd:*)"
     ]
   }
 }

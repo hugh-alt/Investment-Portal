@@ -1,15 +1,15 @@
-import { requireUser, isAdmin } from "@/lib/auth";
+import { requireUser, isSuperAdmin } from "@/lib/auth";
 import { AppShell } from "@/components/app-shell";
 import Link from "next/link";
 
-export default async function AdminLayout({
+export default async function PlatformLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const user = await requireUser();
 
-  if (!isAdmin(user)) {
+  if (!isSuperAdmin(user)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#0F172A]">
         <div className="max-w-sm text-center">
@@ -17,7 +17,7 @@ export default async function AdminLayout({
             Not authorised
           </h1>
           <p className="mt-2 text-sm text-slate-400">
-            Admin access is required to view this section.
+            Super Admin access is required to view this section.
           </p>
           <Link
             href="/dashboard"

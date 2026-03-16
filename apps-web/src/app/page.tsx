@@ -4,7 +4,15 @@ import { getSessionUser } from "@/lib/auth";
 
 export default async function Home() {
   const user = await getSessionUser();
-  if (user) redirect("/dashboard");
+  if (user) {
+    // Redirect authenticated users to their role-appropriate home
+    const homeRoutes: Record<string, string> = {
+      SUPER_ADMIN: "/platform",
+      ADMIN: "/admin",
+      ADVISER: "/adviser",
+    };
+    redirect(homeRoutes[user.role] ?? "/adviser");
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
