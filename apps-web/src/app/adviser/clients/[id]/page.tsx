@@ -34,7 +34,7 @@ import {
 } from "@/lib/liquidity-profile";
 
 // Client-side components from /clients/[id]/
-import { HoldingsTable } from "@/app/clients/[id]/holdings-table";
+// HoldingsTable still exists in /clients/[id]/ for legacy use
 import { AllocationView } from "@/app/clients/[id]/allocation-view";
 import { SAASelector } from "@/app/clients/[id]/saa-selector";
 import { DriftView } from "@/app/clients/[id]/drift-view";
@@ -46,6 +46,8 @@ import { LiquidityStressView } from "@/app/clients/[id]/liquidity-stress-view";
 import { ClientDashboard } from "@/app/clients/[id]/client-dashboard";
 
 import { ClientTabs } from "./client-tabs";
+import { DriftBreachSummary } from "./drift-breach-summary";
+import { PortfolioHoldingsTable } from "./portfolio-holdings-table";
 
 // ── Shared account type ──────────────────────────────────
 
@@ -220,11 +222,14 @@ function NotAuthorised() {
 
 // ── Helper: build taxonomy/allocation context ────────────
 
+type TaxNode = { id: string; name: string; nodeType: string; parentId: string | null };
+
 type TaxCtx = {
   mappings: MappingInput[];
   holdingInputs: HoldingInput[];
   riskBucketById: Map<string, { id: string; name: string }>;
   mappingsByProduct: Map<string, { nodeId: string; productId: string }>;
+  nodeById: Map<string, TaxNode>;
 };
 
 async function buildTaxCtx(accounts: AccountHoldings[], clientId: string): Promise<TaxCtx | null> {
@@ -260,7 +265,7 @@ async function buildTaxCtx(accounts: AccountHoldings[], clientId: string): Promi
     })),
   );
 
-  return { mappings, holdingInputs, riskBucketById, mappingsByProduct };
+  return { mappings, holdingInputs, riskBucketById, mappingsByProduct, nodeById: new Map(taxonomy.nodes.map((n) => [n.id, { id: n.id, name: n.name, nodeType: n.nodeType, parentId: n.parentId }])) };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -378,13 +383,76 @@ async function PortfolioTab({ accounts, clientId, adviserId }: { accounts: Accou
   const ctx = await buildTaxCtx(accounts, clientId);
   const allocation = ctx ? computeAllocation(ctx.holdingInputs, ctx.mappings) : null;
 
-  // Drift summary
+  // Drift
   let driftResult = null;
   const clientSAA = await prisma.clientSAA.findUnique({ where: { clientId }, include: { saa: { include: { allocations: { include: { node: true } } } } } });
   if (clientSAA?.saa && allocation) {
     const cw: CurrentWeightInput[] = allocation.buckets.flatMap((b) => b.assetClasses.map((ac) => ({ nodeId: ac.nodeId, nodeName: ac.nodeName, nodeType: "ASSET_CLASS", riskBucketId: b.riskBucketId, riskBucketName: b.riskBucketName, weight: ac.pctOfTotal })));
     const tg: TargetInput[] = clientSAA.saa.allocations.map((a) => ({ nodeId: a.nodeId, targetWeight: a.targetWeight, minWeight: a.minWeight, maxWeight: a.maxWeight }));
     driftResult = computeDrift(cw, tg);
+  }
+
+  // Sleeve product IDs for source classification
+  const sleevePositions = await prisma.sleeveLiquidPosition.findMany({
+    where: { sleeve: { clientId } },
+    select: { productId: true },
+  });
+  const sleeveProductIds = new Set(sleevePositions.map((p) => p.productId));
+
+  // Build classified holdings with asset class / sub-asset class
+  const classifiedHoldings: import("./portfolio-holdings-table").ClassifiedHolding[] = [];
+
+  // Helper: resolve asset class and sub-asset class from a product's mapped node
+  function resolveClassification(productId: string): { assetClass: string | null; subAssetClass: string | null } {
+    if (!ctx) return { assetClass: null, subAssetClass: null };
+    const mapping = ctx.mappingsByProduct.get(productId);
+    if (!mapping) return { assetClass: null, subAssetClass: null };
+    const node = ctx.nodeById.get(mapping.nodeId);
+    if (!node) return { assetClass: null, subAssetClass: null };
+
+    // If node is SUB_ASSET, its parent is the asset class
+    if (node.nodeType === "SUB_ASSET" && node.parentId) {
+      const parent = ctx.nodeById.get(node.parentId);
+      return { assetClass: parent?.name ?? null, subAssetClass: node.name };
+    }
+    // If node is ASSET_CLASS, no sub-asset
+    if (node.nodeType === "ASSET_CLASS") {
+      return { assetClass: node.name, subAssetClass: null };
+    }
+    // If node is RISK bucket, use the node name as asset class
+    return { assetClass: node.name, subAssetClass: null };
+  }
+
+  for (const account of accounts) {
+    for (const h of account.holdings) {
+      const { assetClass, subAssetClass } = resolveClassification(h.productId);
+      const isSleeve = sleeveProductIds.has(h.productId);
+
+      classifiedHoldings.push({
+        id: h.id,
+        productId: h.productId,
+        productName: h.product.name,
+        productType: h.product.type,
+        marketValue: h.marketValue,
+        units: h.units,
+        price: h.price,
+        assetClass,
+        subAssetClass,
+        source: isSleeve ? "sleeve" : "primary",
+        accountName: account.accountName,
+        lookthrough: h.lookthroughHoldings.map((lt) => {
+          const ltClass = resolveClassification(lt.underlyingProductId);
+          return {
+            id: lt.id,
+            underlyingProductName: lt.underlyingProduct.name,
+            underlyingMarketValue: lt.underlyingMarketValue,
+            weight: lt.weight,
+            assetClass: ltClass.assetClass,
+            subAssetClass: ltClass.subAssetClass,
+          };
+        }),
+      });
+    }
   }
 
   return (
@@ -396,26 +464,13 @@ async function PortfolioTab({ accounts, clientId, adviserId }: { accounts: Accou
         <p className="text-sm text-zinc-400">No taxonomy mappings found.</p>
       )}
 
-      {/* Drift summary */}
-      {driftResult && (
-        <div>
-          <h3 className="text-sm font-medium text-zinc-700">Drift Summary</h3>
-          <DriftView drift={driftResult} />
-        </div>
-      )}
+      {/* Drift breach summary */}
+      <DriftBreachSummary drift={driftResult} />
 
-      {/* Holdings by account */}
+      {/* Holdings */}
       <div>
-        <h3 className="text-sm font-medium text-zinc-700 mb-3">Holdings by Account</h3>
-        {accounts.map((account) => (
-          <div key={account.id} className="mb-6">
-            <div className="flex items-center gap-2 mb-2">
-              <h4 className="text-sm font-medium text-zinc-900">{account.accountName}</h4>
-              <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-600">{account.platform}</span>
-            </div>
-            <HoldingsTable holdings={account.holdings} />
-          </div>
-        ))}
+        <h3 className="text-sm font-medium text-zinc-700 mb-3">Holdings</h3>
+        <PortfolioHoldingsTable holdings={classifiedHoldings} />
       </div>
     </div>
   );
