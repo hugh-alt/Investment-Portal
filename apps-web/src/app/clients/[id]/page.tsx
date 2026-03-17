@@ -982,7 +982,15 @@ async function RebalanceSection({ clientId }: { clientId: string }) {
       </h2>
       <p className="mt-1 text-xs text-zinc-400">SAA: {clientSAA.saa.name}</p>
 
-      <RebalanceGenerateButton clientId={clientId} />
+      <div className="mt-3 flex gap-2">
+        <RebalanceGenerateButton clientId={clientId} />
+        <Link
+          href="/adviser/rebalance/new"
+          className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900"
+        >
+          Open Wizard
+        </Link>
+      </div>
 
       {plansForUI.length > 0 ? (
         plansForUI.map((plan) => (
