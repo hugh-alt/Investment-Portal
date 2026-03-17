@@ -1,6 +1,8 @@
 "use client";
 
 import type { AllocationResult } from "@/lib/allocation";
+import type { PMCommitmentSummary, ProductHolding, SleeveAllocationData } from "@/lib/allocation-chart-data";
+import { AllocationChart } from "./allocation-chart";
 
 const fmt = (v: number) =>
   "$" + v.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -12,7 +14,17 @@ const BUCKET_COLORS: Record<string, string> = {
   Defensive: "bg-green-500",
 };
 
-export function AllocationView({ allocation }: { allocation: AllocationResult }) {
+export function AllocationView({
+  allocation,
+  productHoldings = [],
+  pmCommitments = [],
+  sleeveData = null,
+}: {
+  allocation: AllocationResult;
+  productHoldings?: ProductHolding[];
+  pmCommitments?: PMCommitmentSummary[];
+  sleeveData?: SleeveAllocationData | null;
+}) {
   if (allocation.totalValue === 0) {
     return <p className="mt-4 text-sm text-zinc-400">No holdings to allocate.</p>;
   }
@@ -23,8 +35,18 @@ export function AllocationView({ allocation }: { allocation: AllocationResult })
         Allocation
       </h2>
 
+      {/* Chart */}
+      <div className="mt-4">
+        <AllocationChart
+          allocation={allocation}
+          productHoldings={productHoldings}
+          pmCommitments={pmCommitments}
+          sleeveData={sleeveData}
+        />
+      </div>
+
       {/* Risk bucket summary bar */}
-      <div className="mt-3 flex h-6 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+      <div className="mt-6 flex h-6 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
         {allocation.buckets.map((b) => (
           <div
             key={b.riskBucketId}

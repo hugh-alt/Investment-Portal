@@ -18,7 +18,8 @@
       "Bash(rm:*)",
       "Bash(curl:*)",
       "Bash(grep:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(ls:*)"
     ]
   }
 }

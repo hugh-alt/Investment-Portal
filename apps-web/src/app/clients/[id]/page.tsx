@@ -43,6 +43,7 @@ import {
 } from "@/lib/liquidity-profile";
 import { LiquidityLadderView } from "./liquidity-ladder-view";
 import { LiquidityStressView } from "./liquidity-stress-view";
+import { ClientDashboard, type DashboardProps } from "./client-dashboard";
 
 export default async function ClientDetailPage({
   params,
@@ -123,27 +124,35 @@ export default async function ClientDetailPage({
           <p className="mt-6 text-sm text-zinc-400">No accounts found.</p>
         ) : (
           <>
-            {client.accounts.map((account) => (
-              <div key={account.id} className="mt-6">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
-                    {account.accountName}
-                  </h2>
-                  <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                    {account.platform}
-                  </span>
-                </div>
-                <HoldingsTable holdings={account.holdings} />
-              </div>
-            ))}
+            {/* Dashboard: summary cards + chart grid */}
+            <DashboardSection accounts={client.accounts} clientId={id} clientName={client.name} totalValue={totalValue} adviserId={client.adviserId} />
 
-            <AllocationSection accounts={client.accounts} clientId={id} />
-            <LiquidityLadderSection accounts={client.accounts} clientId={id} adviserId={client.adviserId} />
-            <LiquidityStressSection clientId={id} />
-            <SAASection clientId={id} accounts={client.accounts} />
-            <ExpectedOutcomesSection clientId={id} accounts={client.accounts} />
-            <RebalanceSection clientId={id} />
-            <SleeveSection clientId={id} />
+            {/* Detailed sections below */}
+            <div className="mt-10 border-t border-zinc-200 pt-8">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4">Detailed Views</h2>
+
+              {client.accounts.map((account) => (
+                <div key={account.id} className="mt-6">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+                      {account.accountName}
+                    </h2>
+                    <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      {account.platform}
+                    </span>
+                  </div>
+                  <HoldingsTable holdings={account.holdings} />
+                </div>
+              ))}
+
+              <AllocationSection accounts={client.accounts} clientId={id} />
+              <LiquidityLadderSection accounts={client.accounts} clientId={id} adviserId={client.adviserId} />
+              <LiquidityStressSection clientId={id} />
+              <SAASection clientId={id} accounts={client.accounts} />
+              <ExpectedOutcomesSection clientId={id} accounts={client.accounts} />
+              <RebalanceSection clientId={id} />
+              <SleeveSection clientId={id} />
+            </div>
           </>
         )}
       </div>
@@ -151,130 +160,233 @@ export default async function ClientDetailPage({
   );
 }
 
-async function AllocationSection({
-  accounts,
-  clientId,
-}: {
-  accounts: {
-    holdings: {
-      productId: string;
-      marketValue: number;
-      product: { name: string; type: string };
-      lookthroughHoldings: {
-        underlyingProductId: string;
-        underlyingMarketValue: number;
-        weight: number;
-        underlyingProduct: { name: string };
-      }[];
+type AccountHoldings = {
+  holdings: {
+    productId: string;
+    marketValue: number;
+    product: { name: string; type: string };
+    lookthroughHoldings: {
+      underlyingProductId: string;
+      underlyingMarketValue: number;
+      weight: number;
+      underlyingProduct: { name: string };
     }[];
   }[];
+};
+
+async function DashboardSection({
+  accounts,
+  clientId,
+  clientName,
+  totalValue,
+  adviserId,
+}: {
+  accounts: AccountHoldings[];
   clientId: string;
+  clientName: string;
+  totalValue: number;
+  adviserId: string;
 }) {
-  // Find the first taxonomy with mappings
+  // ── Allocation data ──────────────────────────────────
   const taxonomy = await prisma.taxonomy.findFirst({
     include: {
       nodes: true,
       productMaps: {
-        where: {
-          OR: [
-            { scope: MappingScope.FIRM_DEFAULT },
-            { scope: MappingScope.CLIENT_OVERRIDE, clientId },
-          ],
-        },
+        where: { OR: [{ scope: MappingScope.FIRM_DEFAULT }, { scope: MappingScope.CLIENT_OVERRIDE, clientId }] },
       },
     },
     orderBy: { createdAt: "asc" },
   });
 
+  let allocation: import("@/lib/allocation").AllocationResult | null = null;
+  const productHoldings: import("@/lib/allocation-chart-data").ProductHolding[] = [];
+  const pmCommitments: import("@/lib/allocation-chart-data").PMCommitmentSummary[] = [];
+  const mappingsByProductDash = new Map<string, { nodeId: string }>();
+
+  if (taxonomy) {
+    const riskBucketById = new Map<string, { id: string; name: string }>();
+    for (const n of taxonomy.nodes) {
+      if (n.nodeType === TaxonomyNodeType.RISK) riskBucketById.set(n.id, { id: n.id, name: n.name });
+    }
+    for (const n of taxonomy.nodes) {
+      if (n.parentId && riskBucketById.has(n.parentId)) riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
+    }
+    for (const n of taxonomy.nodes) {
+      if (n.parentId && riskBucketById.has(n.parentId) && !riskBucketById.has(n.id)) riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
+    }
+    const nodeById = new Map(taxonomy.nodes.map((n) => [n.id, n]));
+
+    const mappingsByProduct = new Map<string, typeof taxonomy.productMaps[number]>();
+    for (const m of taxonomy.productMaps) {
+      const existing = mappingsByProduct.get(m.productId);
+      if (!existing || m.scope === MappingScope.CLIENT_OVERRIDE) mappingsByProduct.set(m.productId, m);
+    }
+    for (const [k, v] of mappingsByProduct) mappingsByProductDash.set(k, { nodeId: v.nodeId });
+
+    const mappings: MappingInput[] = [];
+    for (const [, m] of mappingsByProduct) {
+      const node = nodeById.get(m.nodeId);
+      if (!node) continue;
+      const rb = riskBucketById.get(m.nodeId);
+      mappings.push({ productId: m.productId, nodeId: m.nodeId, nodeName: node.name, nodeType: node.nodeType, riskBucketId: rb?.id ?? null, riskBucketName: rb?.name ?? null });
+    }
+
+    const holdingInputs: HoldingInput[] = accounts.flatMap((a) =>
+      a.holdings.map((h) => ({
+        productId: h.productId, productName: h.product.name, productType: h.product.type, marketValue: h.marketValue,
+        lookthrough: h.lookthroughHoldings.map((lt) => ({ underlyingProductId: lt.underlyingProductId, underlyingProductName: lt.underlyingProduct.name, underlyingMarketValue: lt.underlyingMarketValue, weight: lt.weight })),
+      })),
+    );
+
+    allocation = computeAllocation(holdingInputs, mappings);
+
+    // Product holdings
+    const phMap = new Map<string, (typeof productHoldings)[number]>();
+    for (const h of holdingInputs) {
+      if (h.productType === "MANAGED_PORTFOLIO" && h.lookthrough.length > 0) {
+        for (const lt of h.lookthrough) {
+          const m = mappingsByProduct.get(lt.underlyingProductId);
+          const rb = m ? riskBucketById.get(m.nodeId) : undefined;
+          const existing = phMap.get(lt.underlyingProductId);
+          if (existing) existing.marketValue += lt.underlyingMarketValue;
+          else { const e = { productId: lt.underlyingProductId, productName: lt.underlyingProductName, marketValue: lt.underlyingMarketValue, riskBucketId: rb?.id ?? null, riskBucketName: rb?.name ?? null, assetClassNodeId: m?.nodeId }; phMap.set(lt.underlyingProductId, e); productHoldings.push(e); }
+        }
+      } else {
+        const m = mappingsByProduct.get(h.productId);
+        const rb = m ? riskBucketById.get(m.nodeId) : undefined;
+        const existing = phMap.get(h.productId);
+        if (existing) existing.marketValue += h.marketValue;
+        else { const e = { productId: h.productId, productName: h.productName, marketValue: h.marketValue, riskBucketId: rb?.id ?? null, riskBucketName: rb?.name ?? null, assetClassNodeId: m?.nodeId }; phMap.set(h.productId, e); productHoldings.push(e); }
+      }
+    }
+    productHoldings.sort((a, b) => b.marketValue - a.marketValue);
+  }
+
+  // ── Sleeve data ──────────────────────────────────────
+  const sleeve = await prisma.clientSleeve.findUnique({
+    where: { clientId },
+    include: {
+      commitments: { include: { fund: { select: { name: true, currency: true, profile: true, truth: { include: { defaultTemplate: { select: { id: true, name: true, callCurvePctJson: true, distCurvePctJson: true } } } } } } } },
+      liquidPositions: { include: { product: { select: { id: true, name: true } } } },
+    },
+  });
+
+  let sleeveAllocationData: import("@/lib/allocation-chart-data").SleeveAllocationData | null = null;
+  let sleeveHealth: DashboardProps["sleeveHealth"] = null;
+  const pmProjections: DashboardProps["pmProjections"] = [];
+
+  if (sleeve) {
+    const liquidBucketValue = sleeve.liquidPositions.reduce((s, p) => s + p.marketValue, 0);
+    sleeveAllocationData = {
+      liquidBucketValue,
+      positions: sleeve.liquidPositions.map((p) => ({ productId: p.productId, productName: p.product.name, marketValue: p.marketValue })),
+    };
+
+    const totalUnfunded = sleeve.commitments.reduce((s, c) => s + Math.max(0, c.commitmentAmount - c.fundedAmount), 0);
+    const pmExposure = sleeve.commitments.reduce((s, c) => s + c.commitmentAmount, 0);
+    const requiredBuffer = sleeve.bufferMethod === "VS_UNFUNDED_PCT" ? totalUnfunded * sleeve.bufferPctOfUnfunded : 0;
+    const shortfall = Math.max(0, requiredBuffer - liquidBucketValue);
+    const severity: "OK" | "WARN" | "CRITICAL" = shortfall === 0 ? "OK" : shortfall < requiredBuffer * 0.25 ? "WARN" : "CRITICAL";
+
+    sleeveHealth = { sleeveName: sleeve.name, liquidBucketValue, requiredBuffer, severity, cashBufferPct: sleeve.cashBufferPct, totalUnfunded, pmExposure };
+
+    // PM commitments for chart
+    for (const c of sleeve.commitments) {
+      const fundMap = mappingsByProductDash.get(c.fundId);
+      pmCommitments.push({ fundName: c.fund.name, assetClassNodeId: fundMap?.nodeId ?? "", funded: c.fundedAmount, unfunded: Math.max(0, c.commitmentAmount - c.fundedAmount) });
+
+      // PM projections
+      const tmpl = c.fund.truth?.defaultTemplate;
+      if (tmpl) {
+        const proj = computeProjections(tmpl.callCurvePctJson, tmpl.distCurvePctJson, c.commitmentAmount, tmpl.name, "default");
+        if (proj.projectedCalls.length > 0) pmProjections.push({ fundName: c.fund.name, projectedCalls: proj.projectedCalls });
+      }
+    }
+  }
+
+  // ── Drift data ───────────────────────────────────────
+  let driftResult: import("@/lib/drift").DriftResult | null = null;
+  let saaName: string | null = null;
+
+  const clientSAA = await prisma.clientSAA.findUnique({
+    where: { clientId },
+    include: { saa: { include: { allocations: { include: { node: true } }, taxonomy: { include: { nodes: true } } } } },
+  });
+
+  if (clientSAA?.saa && taxonomy && allocation) {
+    saaName = clientSAA.saa.name;
+    const currentWeights: CurrentWeightInput[] = allocation.buckets.flatMap((b) =>
+      b.assetClasses.map((ac) => ({ nodeId: ac.nodeId, nodeName: ac.nodeName, nodeType: "ASSET_CLASS", riskBucketId: b.riskBucketId, riskBucketName: b.riskBucketName, weight: ac.pctOfTotal })),
+    );
+    const targets: TargetInput[] = clientSAA.saa.allocations.map((a) => ({ nodeId: a.nodeId, targetWeight: a.targetWeight, minWeight: a.minWeight, maxWeight: a.maxWeight }));
+    driftResult = computeDrift(currentWeights, targets);
+  }
+
+  // ── Liquidity ladder ─────────────────────────────────
+  let liquidityBuckets: import("@/lib/liquidity-profile").LadderBucket[] = [];
+
+  if (taxonomy) {
+    const productOverridesRaw = await prisma.productLiquidityOverride.findMany({ include: { profile: true } });
+    const overrides = new Map<string, LiquidityProfileData>(productOverridesRaw.map((o) => [o.productId, { tier: o.profile.tier, horizonDays: o.profile.horizonDays, stressedHaircutPct: o.profile.stressedHaircutPct, gateOrSuspendRisk: o.profile.gateOrSuspendRisk, noticeDays: o.profile.noticeDays, gatePctPerPeriod: o.profile.gatePctPerPeriod, gatePeriodDays: o.profile.gatePeriodDays }]));
+    const adviserOverridesRaw = await prisma.adviserLiquidityOverride.findMany({ where: { adviserId }, include: { profile: true } });
+    const adviserOverrides = new Map<string, LiquidityProfileData>(adviserOverridesRaw.map((o) => [o.productId, { tier: o.profile.tier, horizonDays: o.profile.horizonDays, stressedHaircutPct: o.profile.stressedHaircutPct, gateOrSuspendRisk: o.profile.gateOrSuspendRisk, noticeDays: o.profile.noticeDays, gatePctPerPeriod: o.profile.gatePctPerPeriod, gatePeriodDays: o.profile.gatePeriodDays }]));
+    const taxDefaultsRaw = await prisma.taxonomyLiquidityDefault.findMany({ include: { profile: true } });
+    const taxonomyDefaults = new Map<string, LiquidityProfileData>(taxDefaultsRaw.map((d) => [d.taxonomyNodeId, { tier: d.profile.tier, horizonDays: d.profile.horizonDays, stressedHaircutPct: d.profile.stressedHaircutPct, gateOrSuspendRisk: d.profile.gateOrSuspendRisk, noticeDays: d.profile.noticeDays, gatePctPerPeriod: d.profile.gatePctPerPeriod, gatePeriodDays: d.profile.gatePeriodDays }]));
+    const nodes = new Map<string, LPTaxNode>((taxonomy.nodes).map((n) => [n.id, { id: n.id, parentId: n.parentId }]));
+    const productMappings: LPProductMapping[] = (taxonomy.productMaps).map((m) => ({ productId: m.productId, nodeId: m.nodeId }));
+
+    const exposures: ExposureInput[] = [];
+    for (const a of accounts) for (const h of a.holdings) {
+      if (h.product.type === "MANAGED_PORTFOLIO" && h.lookthroughHoldings.length > 0) {
+        for (const lt of h.lookthroughHoldings) exposures.push({ productId: lt.underlyingProductId, productName: lt.underlyingProduct.name, marketValue: lt.underlyingMarketValue });
+      } else exposures.push({ productId: h.productId, productName: h.product.name, marketValue: h.marketValue });
+    }
+    const byProduct = new Map<string, ExposureInput>();
+    for (const e of exposures) { const ex = byProduct.get(e.productId); if (ex) ex.marketValue += e.marketValue; else byProduct.set(e.productId, { ...e }); }
+    const ladder = buildLiquidityLadder([...byProduct.values()], productMappings, overrides, taxonomyDefaults, nodes, adviserOverrides);
+    liquidityBuckets = ladder.buckets;
+  }
+
+  return (
+    <ClientDashboard
+      clientName={clientName}
+      totalValue={totalValue}
+      allocation={allocation}
+      productHoldings={productHoldings}
+      pmCommitments={pmCommitments}
+      sleeveAllocationData={sleeveAllocationData}
+      drift={driftResult}
+      saaName={saaName}
+      liquidityBuckets={liquidityBuckets}
+      totalPortfolioValue={totalValue}
+      sleeveHealth={sleeveHealth}
+      pmProjections={pmProjections}
+    />
+  );
+}
+
+async function AllocationSection({ accounts, clientId }: { accounts: AccountHoldings[]; clientId: string }) {
+  const taxonomy = await prisma.taxonomy.findFirst({
+    include: { nodes: true, productMaps: { where: { OR: [{ scope: MappingScope.FIRM_DEFAULT }, { scope: MappingScope.CLIENT_OVERRIDE, clientId }] } } },
+    orderBy: { createdAt: "asc" },
+  });
   if (!taxonomy) return null;
 
-  // Build risk bucket lookup: nodeId → ancestor risk bucket
   const riskBucketById = new Map<string, { id: string; name: string }>();
-  const riskBuckets = taxonomy.nodes.filter((n) => n.nodeType === TaxonomyNodeType.RISK);
-  for (const rb of riskBuckets) {
-    riskBucketById.set(rb.id, { id: rb.id, name: rb.name });
-  }
-  // For asset class / sub-asset nodes, walk up to find risk bucket parent
-  for (const n of taxonomy.nodes) {
-    if (n.parentId && riskBucketById.has(n.parentId)) {
-      riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
-    }
-  }
-  // Second pass for sub-assets whose parent is asset class
-  for (const n of taxonomy.nodes) {
-    if (n.parentId && riskBucketById.has(n.parentId) && !riskBucketById.has(n.id)) {
-      riskBucketById.set(n.id, riskBucketById.get(n.parentId)!);
-    }
-  }
-
+  for (const n of taxonomy.nodes) { if (n.nodeType === TaxonomyNodeType.RISK) riskBucketById.set(n.id, { id: n.id, name: n.name }); }
+  for (const n of taxonomy.nodes) { if (n.parentId && riskBucketById.has(n.parentId)) riskBucketById.set(n.id, riskBucketById.get(n.parentId)!); }
+  for (const n of taxonomy.nodes) { if (n.parentId && riskBucketById.has(n.parentId) && !riskBucketById.has(n.id)) riskBucketById.set(n.id, riskBucketById.get(n.parentId)!); }
   const nodeById = new Map(taxonomy.nodes.map((n) => [n.id, n]));
-
-  // Build mapping inputs: client overrides take priority over firm defaults
   const mappingsByProduct = new Map<string, typeof taxonomy.productMaps[number]>();
-  for (const m of taxonomy.productMaps) {
-    const existing = mappingsByProduct.get(m.productId);
-    if (!existing || m.scope === MappingScope.CLIENT_OVERRIDE) {
-      mappingsByProduct.set(m.productId, m);
-    }
-  }
-
+  for (const m of taxonomy.productMaps) { const existing = mappingsByProduct.get(m.productId); if (!existing || m.scope === MappingScope.CLIENT_OVERRIDE) mappingsByProduct.set(m.productId, m); }
   const mappings: MappingInput[] = [];
-  for (const [, m] of mappingsByProduct) {
-    const node = nodeById.get(m.nodeId);
-    if (!node) continue;
-    const rb = riskBucketById.get(m.nodeId);
-    mappings.push({
-      productId: m.productId,
-      nodeId: m.nodeId,
-      nodeName: node.name,
-      nodeType: node.nodeType,
-      riskBucketId: rb?.id ?? null,
-      riskBucketName: rb?.name ?? null,
-    });
-  }
-
-  // Build holding inputs from all accounts
-  const holdingInputs: HoldingInput[] = accounts.flatMap((a) =>
-    a.holdings.map((h) => ({
-      productId: h.productId,
-      productName: h.product.name,
-      productType: h.product.type,
-      marketValue: h.marketValue,
-      lookthrough: h.lookthroughHoldings.map((lt) => ({
-        underlyingProductId: lt.underlyingProductId,
-        underlyingProductName: lt.underlyingProduct.name,
-        underlyingMarketValue: lt.underlyingMarketValue,
-        weight: lt.weight,
-      })),
-    })),
-  );
-
+  for (const [, m] of mappingsByProduct) { const node = nodeById.get(m.nodeId); if (!node) continue; const rb = riskBucketById.get(m.nodeId); mappings.push({ productId: m.productId, nodeId: m.nodeId, nodeName: node.name, nodeType: node.nodeType, riskBucketId: rb?.id ?? null, riskBucketName: rb?.name ?? null }); }
+  const holdingInputs: HoldingInput[] = accounts.flatMap((a) => a.holdings.map((h) => ({ productId: h.productId, productName: h.product.name, productType: h.product.type, marketValue: h.marketValue, lookthrough: h.lookthroughHoldings.map((lt) => ({ underlyingProductId: lt.underlyingProductId, underlyingProductName: lt.underlyingProduct.name, underlyingMarketValue: lt.underlyingMarketValue, weight: lt.weight })) })));
   const allocation = computeAllocation(holdingInputs, mappings);
-
   return <AllocationView allocation={allocation} />;
 }
 
-async function LiquidityLadderSection({
-  accounts,
-  clientId,
-  adviserId,
-}: {
-  accounts: {
-    holdings: {
-      productId: string;
-      marketValue: number;
-      product: { name: string; type: string };
-      lookthroughHoldings: {
-        underlyingProductId: string;
-        underlyingMarketValue: number;
-        weight: number;
-        underlyingProduct: { name: string };
-      }[];
-    }[];
-  }[];
-  clientId: string;
-  adviserId: string;
-}) {
+async function LiquidityLadderSection({ accounts, clientId, adviserId }: { accounts: AccountHoldings[]; clientId: string; adviserId: string }) {
   // Fetch taxonomy, mappings, overrides, and defaults
   const taxonomy = await prisma.taxonomy.findFirst({
     include: {
@@ -503,25 +615,7 @@ async function LiquidityStressSection({ clientId }: { clientId: string }) {
   );
 }
 
-async function SAASection({
-  clientId,
-  accounts,
-}: {
-  clientId: string;
-  accounts: {
-    holdings: {
-      productId: string;
-      marketValue: number;
-      product: { name: string; type: string };
-      lookthroughHoldings: {
-        underlyingProductId: string;
-        underlyingMarketValue: number;
-        weight: number;
-        underlyingProduct: { name: string };
-      }[];
-    }[];
-  }[];
-}) {
+async function SAASection({ clientId, accounts }: { clientId: string; accounts: AccountHoldings[] }) {
   // Get available SAAs
   const saas = await prisma.sAA.findMany({
     select: { id: true, name: true, ownerScope: true },
@@ -670,25 +764,7 @@ async function SAASection({
   );
 }
 
-async function ExpectedOutcomesSection({
-  clientId,
-  accounts,
-}: {
-  clientId: string;
-  accounts: {
-    holdings: {
-      productId: string;
-      marketValue: number;
-      product: { name: string; type: string };
-      lookthroughHoldings: {
-        underlyingProductId: string;
-        underlyingMarketValue: number;
-        weight: number;
-        underlyingProduct: { name: string };
-      }[];
-    }[];
-  }[];
-}) {
+async function ExpectedOutcomesSection({ clientId, accounts }: { clientId: string; accounts: AccountHoldings[] }) {
   // Get all ACTIVE CMA sets for the dropdown
   const activeCmaSets = await prisma.cMASet.findMany({
     where: { status: "ACTIVE" },
