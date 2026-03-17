@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, memo } from "react";
 import Highcharts from "highcharts";
 import SunburstModule from "highcharts/modules/sunburst";
 import TreemapModule from "highcharts/modules/treemap";
+import TreegraphModule from "highcharts/modules/treegraph";
 import HighchartsReact from "highcharts-react-official";
 import type { AllocationResult } from "@/lib/allocation";
 import {
@@ -21,6 +22,8 @@ import {
 if (typeof SunburstModule === "function") (SunburstModule as any)(Highcharts);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 if (typeof TreemapModule === "function") (TreemapModule as any)(Highcharts);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+if (typeof TreegraphModule === "function") (TreegraphModule as any)(Highcharts);
 
 const money = (v: number) =>
   "$" + v.toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -69,6 +72,7 @@ function AllocationChartInner({
   let options: Highcharts.Options;
 
   if (chartMode === "radial") {
+    // ── Sunburst ─────────────────────────────────────
     const data = viewMode === "asset_class"
       ? buildSunburstByAssetClass(allocation, pmCommitments, sleeveData)
       : buildSunburstByProduct(allocation, productHoldings, pmCommitments, sleeveData);
@@ -94,24 +98,75 @@ function AllocationChartInner({
       } as Highcharts.SeriesOptionsType],
     };
   } else {
-    const data = buildTreemapData(allocation, productHoldings, pmCommitments, sleeveData);
+    // ── Treegraph (node-link hierarchy) ──────────────
+    const tmData = buildTreemapData(allocation, productHoldings, pmCommitments, sleeveData);
+
+    // Treegraph needs [{id, parent, name, ...}] — same shape, but
+    // leaf nodes need no value field; we use dataLabels for display.
+    const treeData = tmData.map((p) => ({
+      id: p.id,
+      parent: p.parent ?? undefined,
+      name: p.name,
+      color: p.color,
+      custom: p.custom,
+      dataLabels: {
+        format: p.custom?.pctOfTotal
+          ? `{point.name}<br/>${(p.custom.pctOfTotal * 100).toFixed(1)}%`
+          : "{point.name}",
+      },
+    }));
+
     options = {
-      chart: { height: 420, backgroundColor: "transparent", style: { fontFamily: "'IBM Plex Sans', system-ui, sans-serif" } },
+      chart: {
+        height: Math.max(400, treeData.length * 22 + 80),
+        backgroundColor: "transparent",
+        style: { fontFamily: "'IBM Plex Sans', system-ui, sans-serif" },
+        spacingLeft: 10,
+        spacingRight: 10,
+      },
       credits: { enabled: false },
       title: { text: undefined },
-      tooltip: { useHTML: true, backgroundColor: "#FFFFFF", borderColor: "#E4E4E7", style: { color: "#18181B" }, formatter: chartTooltip },
+      tooltip: {
+        useHTML: true,
+        backgroundColor: "#FFFFFF",
+        borderColor: "#E4E4E7",
+        style: { color: "#18181B" },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        formatter: function (this: any) {
+          const point = this.point ?? {};
+          const custom = point.custom;
+          const pctStr = custom?.pctOfTotal ? `(${(custom.pctOfTotal * 100).toFixed(1)}%)` : "";
+          let label = "";
+          if (custom?.isFunded) label = ' <span style="color:#7c3aed">Funded</span>';
+          if (custom?.isUnfunded) label = ' <span style="color:#ddd6fe">Unfunded</span>';
+          return `<b>${point.name ?? ""}</b>${label} ${pctStr}`;
+        },
+      },
       series: [{
-        type: "treemap",
-        layoutAlgorithm: "squarified",
-        allowDrillToNode: true,
-        alternateStartingDirection: true,
-        borderWidth: 2,
-        borderColor: "#ffffff",
-        data: data.map((p) => ({ id: p.id, parent: p.parent, name: p.name, value: p.value, color: p.color, custom: p.custom })),
+        type: "treegraph" as unknown as string,
+        data: treeData,
+        marker: {
+          symbol: "rect",
+          width: 18,
+          height: 18,
+          radius: 4,
+        },
+        link: {
+          type: "curved",
+          lineWidth: 1.5,
+        },
+        nodeWidth: 20,
+        dataLabels: {
+          enabled: true,
+          style: { fontSize: "10px", fontWeight: "500", color: "#3f3f46", textOutline: "none" },
+          crop: false,
+          overflow: "allow" as Highcharts.DataLabelsOverflowValue,
+        },
         levels: [
-          { level: 1, borderWidth: 4, dataLabels: { enabled: true, style: { fontSize: "13px", fontWeight: "700" } } },
-          { level: 2, borderWidth: 2, dataLabels: { enabled: true, style: { fontSize: "11px", fontWeight: "500" } } },
-          { level: 3, dataLabels: { enabled: false } },
+          { level: 1, dataLabels: { style: { fontSize: "12px", fontWeight: "700" } } },
+          { level: 2, dataLabels: { style: { fontSize: "11px", fontWeight: "600" } } },
+          { level: 3, dataLabels: { style: { fontSize: "10px" } } },
+          { level: 4, dataLabels: { style: { fontSize: "9px" } } },
         ],
       } as Highcharts.SeriesOptionsType],
     };
@@ -129,7 +184,7 @@ function AllocationChartInner({
           <ToggleBtn active={chartMode === "tree"} onClick={() => setChartMode("tree")}>Tree</ToggleBtn>
         </div>
       </div>
-      <div className="rounded-lg border border-zinc-200 bg-white p-2">
+      <div className={`rounded-lg border border-zinc-200 bg-white p-2 ${chartMode === "tree" ? "overflow-x-auto" : ""}`}>
         <HighchartsReact key={`${chartMode}-${viewMode}`} highcharts={Highcharts} options={options} ref={chartRef} />
       </div>
       {hasPM && (

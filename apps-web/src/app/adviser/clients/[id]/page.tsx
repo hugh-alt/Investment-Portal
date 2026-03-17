@@ -290,7 +290,7 @@ async function OverviewTab({ accounts, clientId, clientName, totalValue, adviser
     const pmExp = sleeve.commitments.reduce((s, c) => s + c.commitmentAmount, 0);
     const req = sleeve.bufferMethod === "VS_UNFUNDED_PCT" ? totalUnf * sleeve.bufferPctOfUnfunded : 0;
     const sf = Math.max(0, req - liquidBucketValue);
-    sleeveHealth = { sleeveName: sleeve.name, liquidBucketValue, requiredBuffer: req, severity: (sf === 0 ? "OK" : sf < req * 0.25 ? "WARN" : "CRITICAL") as "OK" | "WARN" | "CRITICAL", cashBufferPct: sleeve.cashBufferPct, totalUnfunded: totalUnf, pmExposure: pmExp };
+    sleeveHealth = { sleeveName: sleeve.name, liquidBucketValue, requiredBuffer: req, severity: (sf === 0 ? "OK" : sf < req * 0.25 ? "WARN" : "CRITICAL") as "OK" | "WARN" | "CRITICAL", cashBufferPct: sleeve.cashBufferPct, totalUnfunded: totalUnf, pmExposure: pmExp, pmFundCount: sleeve.commitments.length };
 
     for (const c of sleeve.commitments) {
       const tmpl = c.fund.truth?.defaultTemplate;
@@ -351,11 +351,22 @@ async function OverviewTab({ accounts, clientId, clientName, totalValue, adviser
     } catch { /* liquidity tables may not exist */ }
   }
 
+  // Compute T+2 liquid % and primary account value
+  const primaryAccountValue = accounts.length > 0
+    ? accounts.reduce((best, a) => {
+        const v = a.holdings.reduce((s, h) => s + h.marketValue, 0);
+        return v > best ? v : best;
+      }, 0)
+    : 0;
+
+  const t2Bucket = liquidityBuckets.find((b) => b.horizonDays <= 2);
+  const t2LiquidPct = totalValue > 0 && t2Bucket ? t2Bucket.grossValue / totalValue : 0;
+
   return (
     <ClientDashboard
-      clientName={clientName} totalValue={totalValue}
+      clientName={clientName} totalValue={totalValue} currency="AUD" primaryAccountValue={primaryAccountValue}
       allocation={allocation} productHoldings={productHoldings} pmCommitments={pmCommitments} sleeveAllocationData={sleeveAllocationData}
-      drift={driftResult} saaName={saaName} liquidityBuckets={liquidityBuckets} totalPortfolioValue={totalValue}
+      drift={driftResult} saaName={saaName} liquidityBuckets={liquidityBuckets} totalPortfolioValue={totalValue} t2LiquidPct={t2LiquidPct}
       sleeveHealth={sleeveHealth} pmProjections={pmProjections}
     />
   );
